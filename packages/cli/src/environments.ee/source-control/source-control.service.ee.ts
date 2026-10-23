@@ -7,12 +7,14 @@ import { Logger } from '@n8n/backend-common';
 import { type User } from '@n8n/db';
 import { OnPubSubEvent } from '@n8n/decorators';
 import { Service } from '@n8n/di';
+import { hasGlobalScope } from '@n8n/permissions';
 import { writeFileSync } from 'fs';
 import { UnexpectedError, UserError, jsonParse } from 'n8n-workflow';
 import * as path from 'path';
 import type { PushResult } from 'simple-git';
 
 import {
+	SOURCE_CONTROL_ADMIN_PUSH_REQUIRED_MESSAGE,
 	SOURCE_CONTROL_DEFAULT_EMAIL,
 	SOURCE_CONTROL_DEFAULT_NAME,
 	SOURCE_CONTROL_README,
@@ -243,8 +245,11 @@ export class SourceControlService {
 		return await this.gitService.setBranch(branch);
 	}
 
-	// will reset the branch to the remote branch and pull
-	// this will discard all local changes
+	/**
+	 * Resets the current local branch to match its remote counterpart, discarding all local changes.
+	 * This operation overwrites any uncommitted or divergent local changes with the state from the remote branch.
+	 * Use with caution, as this action cannot be undone.
+	 */
 	async resetWorkfolder(): Promise<ImportResult | undefined> {
 		if (!this.gitService.git) {
 			await this.initGitService();
@@ -261,6 +266,52 @@ export class SourceControlService {
 		return;
 	}
 
+	/**
+	 * Resolves which resources a push may act on. The status service is the single source of
+	 * truth for what the user may push: it scopes resources to the user's projects and derives
+	 * each resource's file path and status on the server. The client only selects resources by
+	 * (id, type); file path and status are always taken from the matching authorized entry, so
+	 * an authorized (id, type) cannot be pointed at another resource's file.
+	 */
+	private async resolveAuthorizedFilesToPush(
+		user: User,
+		requestedFiles: SourceControlledFile[],
+	): Promise<SourceControlledFile[]> {
+		const allowedResources = (await this.sourceControlStatusService.getStatus(user, {
+			direction: 'push',
+			verbose: false,
+			preferLocalVersion: true,
+		})) as SourceControlledFile[];
+
+		// No explicit selection: push everything the user is allowed to.
+		let filesToPush = allowedResources;
+
+		if (requestedFiles.length) {
+			const allowedKeys = new Set(
+				allowedResources.map((allowed) => `${allowed.type}:${allowed.id}`),
+			);
+			const requestedKeys = new Set<string>();
+			for (const requested of requestedFiles) {
+				const key = `${requested.type}:${requested.id}`;
+				if (!allowedKeys.has(key)) {
+					throw new ForbiddenError('You are not allowed to push these changes');
+				}
+				requestedKeys.add(key);
+			}
+			// Filter (don't map to one record per key) so a server-reported conflict for a
+			// (type, id) isn't dropped before the caller's conflict check.
+			filesToPush = allowedResources.filter((allowed) =>
+				requestedKeys.has(`${allowed.type}:${allowed.id}`),
+			);
+		}
+
+		// Defense in depth: keep every acted-on path inside the git work folder.
+		return filesToPush.map((file) => ({
+			...file,
+			file: normalizeAndValidateSourceControlledFilePath(this.gitFolder, file.file),
+		}));
+	}
+
 	async pushWorkfolder(
 		user: User,
 		options: PushWorkFolderRequestDto,
@@ -275,43 +326,11 @@ export class SourceControlService {
 			throw new BadRequestError('Cannot push onto read-only branch.');
 		}
 
+		await this.ensureCanPushWorkfolder(user);
+
 		const context = new SourceControlContext(user);
 
-		let filesToPush: SourceControlledFile[] = options.fileNames.map((file) => {
-			const normalizedPath = normalizeAndValidateSourceControlledFilePath(
-				this.gitFolder,
-				file.file,
-			);
-
-			return {
-				...file,
-				file: normalizedPath,
-			};
-		});
-
-		const allowedResources = (await this.sourceControlStatusService.getStatus(user, {
-			direction: 'push',
-			verbose: false,
-			preferLocalVersion: true,
-		})) as SourceControlledFile[];
-
-		// Fallback to all allowed resources if no fileNames are provided
-		if (!filesToPush.length) {
-			filesToPush = allowedResources;
-		}
-
-		// If fileNames are provided, we need to check if they are allowed
-		if (
-			filesToPush !== allowedResources &&
-			filesToPush.some(
-				(file) =>
-					!allowedResources.some((allowed) => {
-						return allowed.id === file.id && allowed.type === file.type;
-					}),
-			)
-		) {
-			throw new ForbiddenError('You are not allowed to push these changes');
-		}
+		const filesToPush = await this.resolveAuthorizedFilesToPush(user, options.fileNames);
 
 		let statusResult: SourceControlledFile[] = filesToPush;
 
@@ -497,6 +516,11 @@ export class SourceControlService {
 
 	async getStatus(user: User, options: SourceControlGetStatus) {
 		await this.sanityCheck();
+
+		if (options.direction === 'push') {
+			await this.ensureCanPushWorkfolder(user);
+		}
+
 		return await this.sourceControlStatusService.getStatus(user, options);
 	}
 
@@ -540,6 +564,14 @@ export class SourceControlService {
 			}
 			default:
 				throw new BadRequestError(`Unsupported file type: ${type}`);
+		}
+	}
+
+	private async ensureCanPushWorkfolder(user: User): Promise<void> {
+		if (await this.gitService.requiresAdminPushForProjectsMigration()) {
+			if (!hasGlobalScope(user, 'sourceControl:push')) {
+				throw new ForbiddenError(SOURCE_CONTROL_ADMIN_PUSH_REQUIRED_MESSAGE);
+			}
 		}
 	}
 }

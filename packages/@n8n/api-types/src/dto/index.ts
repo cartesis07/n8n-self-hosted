@@ -49,6 +49,7 @@ export { PullWorkFolderRequestDto } from './source-control/pull-work-folder-requ
 export { PushWorkFolderRequestDto } from './source-control/push-work-folder-request.dto';
 
 export { CreateCredentialDto } from './credentials/create-credential.dto';
+export { TestCredentialRequestDto } from './credentials/test-credential-request.dto';
 export { VariableListRequestDto } from './variables/variables-list-request.dto';
 export { CreateVariableRequestDto } from './variables/create-variable-request.dto';
 export { UpdateVariableRequestDto } from './variables/update-variable-request.dto';
@@ -106,3 +107,4 @@ export {
 	DeleteOAuthClientResponseDto,
 } from './oauth/oauth-client.dto';
 export { ProvisioningConfigDto, ProvisioningConfigPatchDto } from './provisioning/config.dto';
+export { CommunityPackageRequestDto } from './community-packages/community-package-request.dto';

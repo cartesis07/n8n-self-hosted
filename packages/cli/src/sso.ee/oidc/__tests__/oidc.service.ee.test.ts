@@ -53,6 +53,12 @@ describe('OidcService', () => {
 		loadOnStartup: true,
 	};
 
+	const setOidcState = (loginEnabled: boolean, isActive: boolean) => {
+		jest.spyOn(ssoHelpers, 'isOidcCurrentAuthenticationMethod').mockReturnValue(isActive);
+		const svc = oidcService as unknown as { oidcConfig: Record<string, unknown> };
+		svc.oidcConfig = { ...svc.oidcConfig, loginEnabled };
+	};
+
 	beforeEach(async () => {
 		jest.resetAllMocks();
 		Container.reset();
@@ -88,6 +94,32 @@ describe('OidcService', () => {
 		);
 
 		await oidcService.init();
+		setOidcState(true, true);
+	});
+
+	describe('login flow requires OIDC to be the active, enabled method', () => {
+		const login = async () =>
+			await oidcService.loginUser(new URL('https://example.com/callback'), 'state', 'nonce');
+
+		it('generateLoginUrl is rejected when login is disabled', async () => {
+			setOidcState(false, true);
+			await expect(oidcService.generateLoginUrl()).rejects.toThrow(ForbiddenError);
+		});
+
+		it('generateLoginUrl is rejected when another authentication method is active', async () => {
+			setOidcState(true, false);
+			await expect(oidcService.generateLoginUrl()).rejects.toThrow(ForbiddenError);
+		});
+
+		it('loginUser is rejected when login is disabled', async () => {
+			setOidcState(false, true);
+			await expect(login()).rejects.toThrow(ForbiddenError);
+		});
+
+		it('loginUser is rejected when another authentication method is active', async () => {
+			setOidcState(true, false);
+			await expect(login()).rejects.toThrow(ForbiddenError);
+		});
 	});
 
 	describe('reload', () => {
@@ -328,6 +360,24 @@ describe('OidcService', () => {
 			});
 		});
 
+		it('should persist emailVerifiedRequired through updateConfig', async () => {
+			settingsRepository.save = jest.fn().mockResolvedValue(mockConfigFromDB);
+			settingsRepository.findByKey = jest.fn().mockResolvedValue(mockConfigFromDB);
+			jest.spyOn(client, 'discovery').mockResolvedValue({} as client.Configuration);
+
+			await oidcService.updateConfig({
+				...mockOidcConfig,
+				emailVerifiedRequired: true,
+			} as any as OidcConfigDto);
+
+			expect(settingsRepository.save).toHaveBeenCalledWith(
+				expect.objectContaining({
+					key: OIDC_PREFERENCES_DB_KEY,
+					value: expect.stringContaining('"emailVerifiedRequired":true'),
+				}),
+			);
+		});
+
 		it('should not publish in single main setup', async () => {
 			(instanceSettings as any).isMultiMain = false;
 
@@ -560,6 +610,102 @@ describe('OidcService', () => {
 
 			const user = await oidcService.loginUser(callbackUrl, storedState, storedNonce);
 			expect(user).toBeDefined();
+			expect(user.email).toEqual('john.doe@test.com');
+		});
+
+		const mockAuthCallbackWith = (userInfo: Record<string, unknown>) => {
+			oidcService.verifyState = jest.fn().mockReturnValue('valid-state');
+			oidcService.verifyNonce = jest.fn().mockReturnValue('valid-nonce');
+			// @ts-expect-error - getOidcConfiguration is private and only accessible within class 'OidcService'
+			oidcService.getOidcConfiguration = jest.fn().mockResolvedValue({} as client.Configuration);
+			// @ts-expect-error - applySsoProvisioning is private and only accessible within class 'OidcService'
+			oidcService.applySsoProvisioning = jest.fn().mockResolvedValue(undefined);
+			jest.spyOn(client, 'authorizationCodeGrant').mockResolvedValue({
+				access_token: 'valid-access-token',
+				token_type: 'bearer',
+				claims: () => ({ sub: 'valid-subject' }),
+			} as unknown as client.TokenEndpointResponse & client.TokenEndpointResponseHelpers);
+			jest.spyOn(client, 'fetchUserInfo').mockResolvedValue(userInfo as any);
+		};
+
+		const setEmailVerifiedRequired = () => {
+			// Replace (not mutate) the config so the shared default constant is untouched.
+			// @ts-expect-error - oidcConfig is private and only accessible within class 'OidcService'
+			oidcService.oidcConfig = { ...oidcService.oidcConfig, emailVerifiedRequired: true };
+		};
+
+		const login = async () => {
+			const callbackUrl = new URL('https://example.com/callback');
+			return await oidcService.loginUser(
+				callbackUrl,
+				oidcService.generateState().signed,
+				oidcService.generateNonce().signed,
+			);
+		};
+
+		it('should reject linking to an existing user when email is not verified', async () => {
+			mockAuthCallbackWith({ email_verified: false, email: 'john.doe@test.com' });
+			userRepository.findOne = jest.fn().mockResolvedValue({ email: 'john.doe@test.com' } as any);
+
+			await expect(login()).rejects.toThrow(BadRequestError);
+			await expect(login()).rejects.toThrow(
+				'Email address is not verified by the identity provider',
+			);
+			expect(authIdentityRepository.save).not.toHaveBeenCalled();
+		});
+
+		it('should reject when email_verified is the string "false" (no boolean coercion bypass)', async () => {
+			mockAuthCallbackWith({ email_verified: 'false', email: 'john.doe@test.com' });
+			userRepository.findOne = jest.fn().mockResolvedValue({ email: 'john.doe@test.com' } as any);
+
+			await expect(login()).rejects.toThrow(BadRequestError);
+			expect(authIdentityRepository.save).not.toHaveBeenCalled();
+		});
+
+		it('should link to an existing user when email_verified is absent (default, permissive)', async () => {
+			mockAuthCallbackWith({ email: 'john.doe@test.com' });
+			userRepository.findOne = jest
+				.fn()
+				.mockResolvedValue({ id: 'user-1', email: 'john.doe@test.com' } as any);
+
+			const user = await login();
+
+			expect(user.email).toEqual('john.doe@test.com');
+			expect(authIdentityRepository.save).toHaveBeenCalled();
+		});
+
+		it('should reject when email_verified is absent and enforcement is enabled', async () => {
+			setEmailVerifiedRequired();
+			mockAuthCallbackWith({ email: 'john.doe@test.com' });
+			userRepository.findOne = jest.fn().mockResolvedValue({ email: 'john.doe@test.com' } as any);
+
+			await expect(login()).rejects.toThrow(BadRequestError);
+			expect(authIdentityRepository.save).not.toHaveBeenCalled();
+		});
+
+		it('should link when email_verified is true and enforcement is enabled', async () => {
+			setEmailVerifiedRequired();
+			mockAuthCallbackWith({ email_verified: true, email: 'john.doe@test.com' });
+			userRepository.findOne = jest
+				.fn()
+				.mockResolvedValue({ id: 'user-1', email: 'john.doe@test.com' } as any);
+
+			const user = await login();
+
+			expect(user.email).toEqual('john.doe@test.com');
+			expect(authIdentityRepository.save).toHaveBeenCalled();
+		});
+
+		it('should not re-check email_verified for an already-linked identity', async () => {
+			// Enforcement on + unverified email, but the identity is already bound by `sub`.
+			setEmailVerifiedRequired();
+			mockAuthCallbackWith({ email_verified: false, email: 'john.doe@test.com' });
+			authIdentityRepository.findOne = jest
+				.fn()
+				.mockResolvedValue({ user: { email: 'john.doe@test.com' } } as any);
+
+			const user = await login();
+
 			expect(user.email).toEqual('john.doe@test.com');
 		});
 	});

@@ -143,6 +143,7 @@ describe('formCompletionUtils', () => {
 					completionTitle: 'Form Completion',
 					completionMessage: maliciousMessage,
 					responseText,
+					respondWith: 'showText',
 					options: { formTitle: 'Form Title' },
 				};
 				return params[parameterName];
@@ -322,13 +323,43 @@ describe('formCompletionUtils', () => {
 			expect(mockResponse.render).toHaveBeenCalled();
 		});
 
-		it('should NOT set Content-Security-Policy header when respondWith is redirect', async () => {
+		it.each(['', 'ws://example.com'])(
+			'should keep the Content-Security-Policy header when the redirect URL is not valid (case %#)',
+			async (invalidRedirectUrl) => {
+				mockWebhookFunctions.getNodeParameter.mockImplementation((parameterName: string) => {
+					const params: { [key: string]: any } = {
+						completionTitle: 'Form Completion',
+						completionMessage: 'Form has been submitted successfully',
+						options: { formTitle: 'Form Title' },
+						respondWith: 'redirect',
+						redirectUrl: invalidRedirectUrl,
+					};
+					return params[parameterName];
+				});
+
+				await renderFormCompletion(mockWebhookFunctions, mockResponse, trigger);
+
+				expect(mockResponse.setHeader).toHaveBeenCalledWith(
+					'Content-Security-Policy',
+					expect.stringContaining('sandbox'),
+				);
+				expect(mockResponse.removeHeader).not.toHaveBeenCalled();
+				expect(mockResponse.render).toHaveBeenCalledWith(
+					'form-trigger-completion',
+					expect.objectContaining({ redirectUrl: undefined }),
+				);
+			},
+		);
+
+		it('should remove the Content-Security-Policy header when respondWith is redirect', async () => {
 			mockWebhookFunctions.getNodeParameter.mockImplementation((parameterName: string) => {
 				const params: { [key: string]: any } = {
 					completionTitle: 'Form Completion',
 					completionMessage: 'Form has been submitted successfully',
 					options: { formTitle: 'Form Title' },
 					respondWith: 'redirect',
+					responseText: '<p>Unused response</p>',
+					redirectUrl: 'https://example.com',
 				};
 				return params[parameterName];
 			});
@@ -339,10 +370,17 @@ describe('formCompletionUtils', () => {
 				'Content-Security-Policy',
 				expect.any(String),
 			);
-			expect(mockResponse.render).toHaveBeenCalled();
+			expect(mockResponse.removeHeader).toHaveBeenCalledWith('Content-Security-Policy');
+			expect(mockResponse.render).toHaveBeenCalledWith(
+				'form-trigger-completion',
+				expect.objectContaining({
+					redirectUrl: 'https://example.com',
+					responseText: '',
+				}),
+			);
 		});
 
-		it('should NOT set Content-Security-Policy header when form HTML sandboxing is disabled', async () => {
+		it('should remove the Content-Security-Policy header when form HTML sandboxing is disabled', async () => {
 			jest.mocked(isFormHtmlSandboxingDisabled).mockReturnValueOnce(true);
 
 			mockWebhookFunctions.getNodeParameter.mockImplementation((parameterName: string) => {
@@ -360,6 +398,7 @@ describe('formCompletionUtils', () => {
 				'Content-Security-Policy',
 				expect.any(String),
 			);
+			expect(mockResponse.removeHeader).toHaveBeenCalledWith('Content-Security-Policy');
 			expect(mockResponse.render).toHaveBeenCalled();
 		});
 	});

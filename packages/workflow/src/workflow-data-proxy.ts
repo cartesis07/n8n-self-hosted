@@ -29,8 +29,14 @@ import type {
 import * as NodeHelpers from './node-helpers';
 import { createResultError, createResultOk } from './result';
 import type { IRunExecutionData } from './run-execution-data/run-execution-data';
+import { safeRegex } from './safe-regex';
 import { isResourceLocatorValue } from './type-guards';
-import { deepCopy, isObjectEmpty } from './utils';
+import {
+	containsUnsafeObjectPropertyToken,
+	deepCopy,
+	isObjectEmpty,
+	isSafeObjectProperty,
+} from './utils';
 import type { Workflow } from './workflow';
 import type { EnvProviderState } from './workflow-data-proxy-env-provider';
 import { createEnvProvider, createEnvProviderState } from './workflow-data-proxy-env-provider';
@@ -50,6 +56,14 @@ const PAIRED_ITEM_METHOD = {
 } as const;
 
 type PairedItemMethod = (typeof PAIRED_ITEM_METHOD)[keyof typeof PAIRED_ITEM_METHOD];
+
+// Reads a key from a placeholder source only when it is the source's own
+// property, so a lookup can never resolve to a value reached through the
+// prototype chain (e.g. `constructor` / `__proto__`).
+const readOwnKey = (source: unknown, key: string): unknown => {
+	if (source === null || typeof source !== 'object') return undefined;
+	return Object.hasOwn(source, key) ? (source as Record<string, unknown>)[key] : undefined;
+};
 
 export class WorkflowDataProxy {
 	private runExecutionData: IRunExecutionData | null;
@@ -300,8 +314,7 @@ export class WorkflowDataProxy {
 
 				if (isResourceLocatorValue(returnValue)) {
 					if (returnValue.__regex && typeof returnValue.value === 'string') {
-						const expr = new RegExp(returnValue.__regex);
-						const extracted = expr.exec(returnValue.value);
+						const extracted = safeRegex.exec(returnValue.__regex, returnValue.value);
 						if (extracted && extracted.length >= 2) {
 							returnValue = extracted[1];
 						} else {
@@ -738,6 +751,19 @@ export class WorkflowDataProxy {
 				});
 			}
 
+			// jmespath decodes escape sequences inside quoted identifiers, so
+			// the token check below must run against an unescaped query. Reject
+			// any backslash up front to keep the property-name match meaningful.
+			if (query.includes('\\') || containsUnsafeObjectPropertyToken(query)) {
+				throw new ExpressionError(
+					'Cannot access this property in a jmespath query due to security concerns',
+					{
+						runIndex: that.runIndex,
+						itemIndex: that.itemIndex,
+					},
+				);
+			}
+
 			if (!Array.isArray(data) && typeof data === 'object') {
 				return jmespath.search({ ...data }, query);
 			}
@@ -1027,6 +1053,15 @@ export class WorkflowDataProxy {
 					},
 				);
 			}
+			// Reserved keys resolve to inherited members (e.g. the object's
+			// constructor or prototype) rather than a placeholder value, so they
+			// are never valid placeholder names.
+			if (!isSafeObjectProperty(name)) {
+				throw new ExpressionError('Invalid parameter key', {
+					runIndex,
+					itemIndex,
+				});
+			}
 
 			const resultData = that.runExecutionData?.resultData.runData[that.activeNodeName]?.[runIndex];
 			let inputData;
@@ -1048,10 +1083,12 @@ export class WorkflowDataProxy {
 					type: 'no_execution_data',
 				});
 			}
+			// Resolve only own placeholder keys, never values reached through the
+			// prototype chain of the input data — including the `query` container
+			// itself, which is read as an own key for the same reason.
 			return (
-				// TS does not know that the key exists, we need to address this in refactor
-				(placeholdersDataInputData?.query as Record<string, unknown>)?.[name] ??
-				placeholdersDataInputData?.[name] ??
+				readOwnKey(readOwnKey(placeholdersDataInputData, 'query'), name) ??
+				readOwnKey(placeholdersDataInputData, name) ??
 				defaultValue
 			);
 		};

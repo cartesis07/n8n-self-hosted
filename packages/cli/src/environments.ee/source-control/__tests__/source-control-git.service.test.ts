@@ -3,9 +3,10 @@ import { mock } from 'jest-mock-extended';
 import { simpleGit } from 'simple-git';
 import type { SimpleGit } from 'simple-git';
 
+import { SOURCE_CONTROL_MANAGED_DIRECTORIES, SOURCE_CONTROL_MANAGED_PATHS } from '../constants';
 import { SourceControlGitService } from '../source-control-git.service.ee';
-import type { SourceControlPreferences } from '../types/source-control-preferences';
 import type { SourceControlPreferencesService } from '../source-control-preferences.service.ee';
+import type { SourceControlPreferences } from '../types/source-control-preferences';
 
 const MOCK_BRANCHES = {
 	all: ['origin/master', 'origin/feature/branch'],
@@ -19,6 +20,8 @@ const MOCK_BRANCHES = {
 const mockGitInstance = {
 	branch: jest.fn().mockResolvedValue(MOCK_BRANCHES),
 	env: jest.fn().mockReturnThis(),
+	fetch: jest.fn().mockResolvedValue(undefined),
+	raw: jest.fn().mockResolvedValue(''),
 };
 
 jest.mock('simple-git', () => {
@@ -46,6 +49,190 @@ describe('SourceControlGitService', () => {
 		});
 	});
 
+	const createSynchronizationService = (
+		outputs: { shape?: string; contents?: string },
+		logger = mock<ConstructorParameters<typeof SourceControlGitService>[0]>(),
+	) => {
+		const gitService = new SourceControlGitService(logger, mock(), mock());
+		const git = mock<SimpleGit>();
+		git.branch.mockResolvedValue(MOCK_BRANCHES as never);
+		git.raw
+			.mockResolvedValueOnce('abc123\n')
+			.mockResolvedValueOnce(outputs.shape ?? '')
+			.mockResolvedValueOnce(outputs.contents ?? '')
+			.mockResolvedValue('updated');
+		git.merge.mockResolvedValue(mock());
+		gitService.git = git;
+		jest.spyOn(gitService, 'fetch').mockResolvedValue(mock());
+		return { gitService, git };
+	};
+
+	describe('managed tree validation', () => {
+		it.each(['100644', '100755'])('should accept a regular file with mode %s', async (mode) => {
+			const { gitService, git } = createSynchronizationService({
+				shape: '040000 tree abc123\tworkflows\0',
+				contents: `${mode} blob abc123\tworkflows/example.json\0`,
+			});
+
+			await expect(gitService.pull()).resolves.toBeDefined();
+			expect(git.raw).toHaveBeenNthCalledWith(2, [
+				'ls-tree',
+				'-z',
+				'--full-tree',
+				'abc123',
+				'--',
+				...SOURCE_CONTROL_MANAGED_PATHS,
+			]);
+			expect(git.raw).toHaveBeenNthCalledWith(3, [
+				'ls-tree',
+				'-r',
+				'-z',
+				'--full-tree',
+				'abc123',
+				'--',
+				...SOURCE_CONTROL_MANAGED_DIRECTORIES,
+			]);
+		});
+
+		it.each([
+			{
+				outputs: { shape: '120000 blob abc123\ttags.json\0' },
+				reason: 'Git file mode 120000 is not supported',
+				rawCalls: 2,
+			},
+			{
+				outputs: { shape: '040000 tree abc123\ttags.json\0' },
+				reason: 'Git object type tree is not supported',
+				rawCalls: 2,
+			},
+			{
+				outputs: { shape: '100644 blob abc123\tworkflows\0' },
+				reason: 'Managed path workflows must be a directory',
+				rawCalls: 2,
+			},
+			{
+				outputs: {
+					shape: '040000 tree abc123\tprojects\0',
+					contents: '160000 commit abc123\tprojects/module\0',
+				},
+				reason: 'Git object type commit is not supported',
+				rawCalls: 3,
+			},
+			{
+				outputs: {
+					shape: '040000 tree abc123\tworkflows\0',
+					contents: '100664 blob abc123\tworkflows/example.json\0',
+				},
+				reason: 'Git file mode 100664 is not supported',
+				rawCalls: 3,
+			},
+		])(
+			'should reject an unsupported managed entry ($reason)',
+			async ({ outputs, reason, rawCalls }) => {
+				const logger = mock<ConstructorParameters<typeof SourceControlGitService>[0]>();
+				const { gitService, git } = createSynchronizationService(outputs, logger);
+
+				await expect(gitService.pull()).rejects.toThrow(
+					'The remote repository contains an unsupported source control entry. Update the repository and try again.',
+				);
+				expect(git.raw).toHaveBeenCalledTimes(rawCalls);
+				expect(git.merge).not.toHaveBeenCalled();
+				expect(logger.error).toHaveBeenCalledWith(
+					'Remote source control tree contains an unsupported managed entry',
+					{
+						filePath: expect.any(String),
+						reason,
+					},
+				);
+			},
+		);
+
+		it('should parse managed paths that contain whitespace', async () => {
+			const { gitService } = createSynchronizationService({
+				shape: '040000 tree abc123\tworkflows\0' + '040000 tree def456\tprojects\0',
+				contents:
+					'100644 blob abc123\tworkflows/space tab\tline\nbreak.json\0' +
+					'100755 blob def456\tprojects/project name.json\0',
+			});
+
+			await expect(gitService.pull()).resolves.toBeDefined();
+		});
+
+		it('should ignore entries outside managed paths', async () => {
+			const { gitService, git } = createSynchronizationService({});
+
+			await expect(gitService.pull()).resolves.toBeDefined();
+			expect(git.raw).toHaveBeenNthCalledWith(2, expect.not.arrayContaining(['docs']));
+			expect(git.raw).toHaveBeenNthCalledWith(3, expect.not.arrayContaining(['docs']));
+		});
+	});
+
+	describe('remote updates', () => {
+		it('should validate before merging the current branch', async () => {
+			const { gitService, git } = createSynchronizationService({
+				shape: '100644 blob abc123\ttags.json\0',
+			});
+
+			await gitService.pull();
+
+			expect(git.raw).toHaveBeenNthCalledWith(1, [
+				'rev-parse',
+				'--verify',
+				'refs/remotes/origin/master^{commit}',
+			]);
+			expect(git.raw).toHaveBeenCalledTimes(3);
+			expect(git.merge).toHaveBeenCalledWith(['--ff-only', 'abc123']);
+		});
+
+		it('should validate before checking out a branch', async () => {
+			const { gitService, git } = createSynchronizationService({
+				shape: '100644 blob abc123\ttags.json\0',
+			});
+
+			await gitService.setBranch('main');
+
+			expect(git.raw).toHaveBeenNthCalledWith(4, ['checkout', '-B', 'main', 'abc123']);
+			expect(git.branch).toHaveBeenCalledWith(['--set-upstream-to=origin/main', 'main']);
+		});
+
+		it('should not check out a branch when validation fails', async () => {
+			const { gitService, git } = createSynchronizationService({
+				shape: '120000 blob abc123\ttags.json\0',
+			});
+
+			await expect(gitService.setBranch('main')).rejects.toThrow(
+				'The remote repository contains an unsupported source control entry.',
+			);
+			expect(git.raw).toHaveBeenCalledTimes(2);
+			expect(git.branch).not.toHaveBeenCalled();
+		});
+
+		it('should validate before resetting to a remote branch', async () => {
+			const { gitService, git } = createSynchronizationService({
+				shape: '100644 blob abc123\ttags.json\0',
+			});
+
+			await gitService.resetBranch({ hard: true, target: 'origin/main' });
+
+			expect(git.raw).toHaveBeenNthCalledWith(4, ['reset', '--hard', 'abc123']);
+		});
+
+		it('should preserve local hard and soft reset behavior', async () => {
+			const gitService = new SourceControlGitService(mock(), mock(), mock());
+			const git = mock<SimpleGit>();
+			git.raw.mockResolvedValue('reset');
+			gitService.git = git;
+			const fetchSpy = jest.spyOn(gitService, 'fetch');
+
+			await gitService.resetBranch();
+			await gitService.resetBranch({ hard: false, target: 'HEAD~1' });
+
+			expect(fetchSpy).not.toHaveBeenCalled();
+			expect(git.raw).toHaveBeenNthCalledWith(1, ['reset', '--hard', 'HEAD']);
+			expect(git.raw).toHaveBeenNthCalledWith(2, ['reset', 'HEAD~1']);
+		});
+	});
+
 	describe('initRepository', () => {
 		describe('when local repo is set up after remote is ready', () => {
 			it('should track remote', async () => {
@@ -56,13 +243,15 @@ describe('SourceControlGitService', () => {
 				const prefs = mock<SourceControlPreferences>({ branchName: 'main' });
 				const user = mock<User>();
 				const git = mock<SimpleGit>();
-				const checkoutSpy = jest.spyOn(git, 'checkout');
-				const branchSpy = jest.spyOn(git, 'branch');
 				gitService.git = git;
 				jest.spyOn(gitService, 'setGitCommand').mockResolvedValue();
 				jest
 					.spyOn(gitService, 'getBranches')
 					.mockResolvedValue({ currentBranch: '', branches: ['main'] });
+				const setBranchSpy = jest.spyOn(gitService, 'setBranch').mockResolvedValue({
+					currentBranch: 'main',
+					branches: ['main'],
+				});
 
 				/**
 				 * Act
@@ -72,8 +261,7 @@ describe('SourceControlGitService', () => {
 				/**
 				 * Assert
 				 */
-				expect(checkoutSpy).toHaveBeenCalledWith('main');
-				expect(branchSpy).toHaveBeenCalledWith(['--set-upstream-to=origin/main', 'main']);
+				expect(setBranchSpy).toHaveBeenCalledWith('main');
 			});
 		});
 
@@ -190,11 +378,14 @@ describe('SourceControlGitService', () => {
 					currentBranch: 'master',
 					branches: ['main', 'develop'],
 				});
+				const setBranchSpy = jest.spyOn(gitService, 'setBranch').mockResolvedValue({
+					currentBranch: 'main',
+					branches: ['main', 'develop'],
+				});
 
 				await (gitService as any).ensureBranchSetup('main');
 
-				expect(git.checkout).toHaveBeenCalledWith('main');
-				expect(git.branch).toHaveBeenCalledWith(['--set-upstream-to=origin/main', 'main']);
+				expect(setBranchSpy).toHaveBeenCalledWith('main');
 			});
 
 			it('should not checkout if target branch does not exist on remote', async () => {
@@ -243,7 +434,6 @@ describe('SourceControlGitService', () => {
 				const gitService = new SourceControlGitService(mockLogger, mock(), mock());
 				const git = mock<SimpleGit>();
 				git.branch.mockResolvedValue({ current: 'master' } as never);
-				git.checkout.mockRejectedValue(new Error('Checkout failed'));
 				gitService.git = git;
 
 				jest.spyOn(gitService, 'fetch').mockResolvedValue({} as never);
@@ -251,6 +441,7 @@ describe('SourceControlGitService', () => {
 					currentBranch: 'master',
 					branches: ['main'],
 				});
+				jest.spyOn(gitService, 'setBranch').mockRejectedValue(new Error('Checkout failed'));
 
 				// Should not throw
 				await (gitService as any).ensureBranchSetup('main');
@@ -286,7 +477,11 @@ describe('SourceControlGitService', () => {
 					binary: 'git',
 					maxConcurrentProcesses: 6,
 					trimmed: false,
-					config: [`credential.helper=${expectedCredentialScript}`, 'credential.useHttpPath=true'],
+					config: [
+						'core.symlinks=false',
+						`credential.helper=${expectedCredentialScript}`,
+						'credential.useHttpPath=true',
+					],
 					unsafe: { allowUnsafeCredentialHelper: true },
 				}),
 			);
@@ -313,7 +508,11 @@ describe('SourceControlGitService', () => {
 				"!f() { echo username='user'\"'\"'; rm -rf /'; echo password='pass'\"'\"'; rm -rf /'; }; f";
 			expect(simpleGit).toHaveBeenCalledWith(
 				expect.objectContaining({
-					config: [`credential.helper=${expectedCredentialScript}`, 'credential.useHttpPath=true'],
+					config: [
+						'core.symlinks=false',
+						`credential.helper=${expectedCredentialScript}`,
+						'credential.useHttpPath=true',
+					],
 				}),
 			);
 		});
@@ -331,6 +530,7 @@ describe('SourceControlGitService', () => {
 
 			expect(simpleGit).toHaveBeenCalledWith(
 				expect.objectContaining({
+					config: ['core.symlinks=false'],
 					unsafe: { allowUnsafeSshCommand: true },
 				}),
 			);
@@ -505,6 +705,61 @@ describe('SourceControlGitService', () => {
 					expect.not.stringContaining('Test"User'), // No unescaped quote in final command
 				);
 			});
+		});
+	});
+
+	describe('requiresAdminPushForProjectsMigration', () => {
+		beforeEach(() => {
+			mockSourceControlPreferencesService.getPreferences.mockReturnValue({
+				branchName: 'main',
+			} as SourceControlPreferences);
+		});
+
+		it('should return true when workflows exist on remote but projects do not', async () => {
+			mockGitInstance.raw.mockImplementation(async (args: string[]) => {
+				const path = args[2];
+				if (path === 'workflows') {
+					return '040000 tree abc\tworkflows\n';
+				}
+				if (path === 'projects') {
+					return '';
+				}
+				return '';
+			});
+
+			await expect(sourceControlGitService.requiresAdminPushForProjectsMigration()).resolves.toBe(
+				true,
+			);
+		});
+
+		it('should return false when both workflows and projects exist on remote', async () => {
+			mockGitInstance.raw.mockImplementation(async (args: string[]) => {
+				const path = args[2];
+				if (path === 'workflows' || path === 'projects') {
+					return `040000 tree abc\t${path}\n`;
+				}
+				return '';
+			});
+
+			await expect(sourceControlGitService.requiresAdminPushForProjectsMigration()).resolves.toBe(
+				false,
+			);
+		});
+
+		it('should return false when workflows do not exist on remote', async () => {
+			mockGitInstance.raw.mockResolvedValue('');
+
+			await expect(sourceControlGitService.requiresAdminPushForProjectsMigration()).resolves.toBe(
+				false,
+			);
+		});
+
+		it('should reject when remote directory check fails (fail closed for migration guard)', async () => {
+			mockGitInstance.raw.mockRejectedValue(new Error('network error'));
+
+			await expect(sourceControlGitService.requiresAdminPushForProjectsMigration()).rejects.toThrow(
+				'network error',
+			);
 		});
 	});
 });

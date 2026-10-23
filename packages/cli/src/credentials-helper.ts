@@ -39,6 +39,8 @@ import {
 	NodeHelpers,
 	Workflow,
 	UnexpectedError,
+	UserError,
+	getCredentialAllowedDomains,
 	isExpression,
 } from 'n8n-workflow';
 
@@ -48,6 +50,61 @@ import { CredentialsOverwrites } from '@/credentials-overwrites';
 import { RESPONSE_ERROR_MESSAGES } from './constants';
 import { CredentialNotFoundError } from './errors/credential-not-found.error';
 import { CacheService } from './services/cache/cache.service';
+
+/** OAuth endpoint/flow fields the instance owns for a managed credential. */
+const MANAGED_OAUTH_PINNED_FIELDS = [
+	'authUrl',
+	'accessTokenUrl',
+	'grantType',
+	'authentication', // OAuth2
+	'requestTokenUrl',
+	'signatureMethod', // OAuth1
+] as const;
+
+/**
+ * Applies the credential's allowlist to the requests its `preAuthentication` hook issues.
+ *
+ * Only an explicit `'domains'` list applies. `'none'` passes through: that option means
+ * "block all requests when used in the HTTP Request node" (see the field definition in
+ * `injectDomainRestrictionFields`), and a credential fetching a token from the service it
+ * is configured for is not that — refusing here would leave it unable to authenticate at
+ * all. The sibling call sites in `routing-node` and the HTTP Request node do refuse it,
+ * because there the request *is* the surface the option names.
+ *
+ * Read per request rather than up front so a hook that only transforms token data in
+ * memory is never failed by a list it never uses.
+ */
+function restrictToCredentialDomains(
+	helpers: IHttpRequestHelper,
+	credentials: ICredentialDataDecryptedObject,
+	credentialTypeName: string,
+): IHttpRequestHelper {
+	return {
+		helpers: {
+			httpRequest: async (requestOptions: IHttpRequestOptions): Promise<unknown> => {
+				const allowedDomains = getCredentialAllowedDomains(credentials);
+				if (allowedDomains === undefined) {
+					if (credentials.allowedHttpRequestDomains === 'domains') {
+						throw new UserError(
+							'No allowed domains specified. Configure allowed domains or change restriction setting.',
+						);
+					}
+					return await helpers.helpers.httpRequest(requestOptions);
+				}
+
+				// A request carries one allowlist, and honouring either side alone could widen
+				// what the other permits, so refuse rather than pick.
+				if (requestOptions.allowedDomains !== undefined) {
+					throw new UserError(
+						`The "${credentialTypeName}" credential is restricted to specific domains, which cannot be combined with the domains its authentication step requires. Set "Allowed HTTP Request Domains" to "All" on this credential to use it.`,
+					);
+				}
+
+				return await helpers.helpers.httpRequest({ ...requestOptions, allowedDomains });
+			},
+		},
+	};
+}
 
 const mockNode = {
 	name: '',
@@ -188,7 +245,10 @@ export class CredentialsHelper extends ICredentialsHelper {
 					credentialsExpired ||
 					isTestingCredentials
 				) {
-					const output = await credentialType.preAuthentication.call(helpers, credentials);
+					const output = await credentialType.preAuthentication.call(
+						restrictToCredentialDomains(helpers, credentials, credentialType.displayName),
+						credentials,
+					);
 
 					// if there is data in the output, make sure the returned
 					// property is the expirable property
@@ -413,6 +473,19 @@ export class CredentialsHelper extends ICredentialsHelper {
 			decryptedData.accessTokenUrl = decryptedDataOriginal.accessTokenUrl;
 			decryptedData.grantType = decryptedDataOriginal.grantType;
 			decryptedData.authentication = decryptedDataOriginal.authentication;
+		} else if (this.credentialsOverwrites.usesManagedAuth(type, decryptedDataOriginal)) {
+			// For managed credentials the instance owns the OAuth endpoints. Honor an
+			// admin-configured overwrite for the field, otherwise pin the credential
+			// type default. The user's stored value is never used.
+			const overwrites = this.credentialsOverwrites.getOverwrites(type) ?? {};
+			for (const field of MANAGED_OAUTH_PINNED_FIELDS) {
+				const property = credentialsProperties.find((p) => p.name === field && p.type === 'hidden');
+				// Pinned endpoint/flow fields always default to a string; anything else is skipped.
+				if (typeof property?.default !== 'string') continue;
+				const overwritten = overwrites[field];
+				decryptedData[field] =
+					typeof overwritten === 'string' && overwritten !== '' ? overwritten : property.default;
+			}
 		}
 
 		const canUseExternalSecrets = await this.credentialCanUseExternalSecrets(credential);
@@ -448,15 +521,20 @@ export class CredentialsHelper extends ICredentialsHelper {
 			});
 
 			// Resolve expressions if any are set
-			decryptedData = workflow.expression.getComplexParameterValue(
-				mockNode,
-				decryptedData as INodeParameters,
-				mode,
-				additionalKeys,
-				undefined,
-				undefined,
-				decryptedData,
-			) as ICredentialDataDecryptedObject;
+			await workflow.expression.acquireIsolate();
+			try {
+				decryptedData = workflow.expression.getComplexParameterValue(
+					mockNode,
+					decryptedData as INodeParameters,
+					mode,
+					additionalKeys,
+					undefined,
+					undefined,
+					decryptedData,
+				) as ICredentialDataDecryptedObject;
+			} finally {
+				await workflow.expression.releaseIsolate();
+			}
 		}
 
 		return decryptedData;

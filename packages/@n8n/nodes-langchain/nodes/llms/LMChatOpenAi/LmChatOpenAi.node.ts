@@ -13,6 +13,7 @@ import {
 import { getProxyAgent } from '@utils/httpProxyAgent';
 import { getConnectionHintNoticeField } from '@utils/sharedFields';
 
+import { assertOpenAiCredentialAllowsUrl } from '../../vendors/OpenAi/helpers/credentials';
 import { openAiFailedAttemptHandler } from '../../vendors/OpenAi/helpers/error-handling';
 import { makeN8nLlmFailedAttemptHandler } from '../n8nLlmFailedAttemptHandler';
 import { N8nLlmTracing } from '../N8nLlmTracing';
@@ -742,6 +743,7 @@ export class LmChatOpenAi implements INodeType {
 		const configuration: ClientOptions = {};
 
 		if (options.baseURL) {
+			assertOpenAiCredentialAllowsUrl(this.getNode(), credentials, options.baseURL);
 			configuration.baseURL = options.baseURL;
 		} else if (credentials.url) {
 			configuration.baseURL = credentials.url as string;
@@ -752,6 +754,7 @@ export class LmChatOpenAi implements INodeType {
 				dispatcher: getProxyAgent(configuration.baseURL ?? 'https://api.openai.com/v1'),
 			};
 		}
+		let customHeaderName: string | undefined;
 		if (
 			credentials.header &&
 			typeof credentials.headerName === 'string' &&
@@ -761,6 +764,7 @@ export class LmChatOpenAi implements INodeType {
 			configuration.defaultHeaders = {
 				[credentials.headerName]: credentials.headerValue,
 			};
+			customHeaderName = credentials.headerName;
 		}
 
 		// Extra options to send to OpenAI, that are not directly supported by LangChain
@@ -791,7 +795,9 @@ export class LmChatOpenAi implements INodeType {
 			timeout: options.timeout ?? 60000,
 			maxRetries: options.maxRetries ?? 2,
 			configuration,
-			callbacks: [new N8nLlmTracing(this)],
+			callbacks: [
+				new N8nLlmTracing(this, { redactedHeaders: customHeaderName ? [customHeaderName] : [] }),
+			],
 			modelKwargs,
 			onFailedAttempt: makeN8nLlmFailedAttemptHandler(this, openAiFailedAttemptHandler),
 		};

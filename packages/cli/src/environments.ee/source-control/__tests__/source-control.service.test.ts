@@ -6,6 +6,7 @@ import { mock } from 'jest-mock-extended';
 import { InstanceSettings } from 'n8n-core';
 import type { PushResult } from 'simple-git';
 
+import { SOURCE_CONTROL_ADMIN_PUSH_REQUIRED_MESSAGE } from '@/environments.ee/source-control/constants';
 import { SourceControlPreferencesService } from '@/environments.ee/source-control/source-control-preferences.service.ee';
 import { SourceControlService } from '@/environments.ee/source-control/source-control.service.ee';
 import { ForbiddenError } from '@/errors/response-errors/forbidden.error';
@@ -59,6 +60,7 @@ describe('SourceControlService', () => {
 	beforeEach(() => {
 		jest.resetAllMocks();
 		jest.spyOn(sourceControlService, 'sanityCheck').mockResolvedValue(undefined);
+		gitService.requiresAdminPushForProjectsMigration.mockResolvedValue(false);
 		// Reset mock implementations
 		mockStatusService.getStatus.mockReset();
 	});
@@ -268,28 +270,236 @@ describe('SourceControlService', () => {
 			});
 		});
 
-		it('should throw an error if file path validation fails', async () => {
-			const user = mock<User>();
-			(isContainedWithin as jest.Mock).mockReturnValueOnce(false);
+		it('should throw ForbiddenError when projects migration requires admin push', async () => {
+			const user = Object.assign(new User(), {
+				role: GLOBAL_MEMBER_ROLE,
+			});
+			gitService.requiresAdminPushForProjectsMigration.mockResolvedValueOnce(true);
 
+			await expect(
+				sourceControlService.pushWorkfolder(user, {
+					fileNames: [],
+					commitMessage: 'Test',
+				}),
+			).rejects.toThrow(new ForbiddenError(SOURCE_CONTROL_ADMIN_PUSH_REQUIRED_MESSAGE));
+
+			expect(mockStatusService.getStatus).not.toHaveBeenCalled();
+		});
+
+		it('should allow instance admin to push when projects migration requires admin push', async () => {
+			const user = Object.assign(new User(), {
+				role: GLOBAL_ADMIN_ROLE,
+			});
+			gitService.requiresAdminPushForProjectsMigration.mockResolvedValueOnce(true);
+			mockStatusService.getStatus.mockResolvedValueOnce([]);
+			sourceControlExportService.exportCredentialsToWorkFolder.mockResolvedValueOnce({
+				count: 0,
+				missingIds: [],
+				folder: '',
+				files: [],
+			});
+			gitService.push.mockResolvedValueOnce(mock<PushResult>());
+
+			await sourceControlService.pushWorkfolder(user, {
+				fileNames: [],
+				commitMessage: 'Test',
+			});
+
+			expect(gitService.requiresAdminPushForProjectsMigration).toHaveBeenCalled();
+			expect(mockStatusService.getStatus).toHaveBeenCalled();
+		});
+
+		it('acts on the authorized resource, ignoring the client-supplied file path and status', async () => {
+			// ARRANGE
+			// The status service authorizes only the caller's own resource, with the
+			// server-derived path and status.
+			const user = mock<User>();
+			const now = new Date().toISOString();
+			const authorizedResource: SourceControlledFile = {
+				id: 'authorized-wf',
+				name: 'Authorized Workflow',
+				type: 'workflow',
+				status: 'modified',
+				location: 'local',
+				conflict: false,
+				file: 'workflows/authorized-wf.json',
+				updatedAt: now,
+			};
+
+			mockStatusService.getStatus.mockResolvedValueOnce([authorizedResource]);
+			sourceControlExportService.exportCredentialsToWorkFolder.mockResolvedValueOnce({
+				count: 0,
+				missingIds: [],
+				folder: '',
+				files: [],
+			});
+			(isContainedWithin as jest.Mock).mockReturnValue(true);
+			gitService.push.mockResolvedValueOnce(mock<PushResult>());
+
+			const authorizedPath = `${preferencesService.gitFolder}/workflows/authorized-wf.json`;
+			const otherProjectPath = `${preferencesService.gitFolder}/workflows/other-project-wf.json`;
+
+			// ACT
+			// The caller pairs an authorized (id, type) with another resource's file path
+			// and flips the status to 'deleted'. Both must be ignored.
+			await sourceControlService.pushWorkfolder(user, {
+				fileNames: [
+					{
+						id: 'authorized-wf',
+						type: 'workflow',
+						status: 'deleted',
+						file: 'workflows/other-project-wf.json',
+						name: 'anything',
+						location: 'local',
+						conflict: false,
+						updatedAt: now,
+					},
+				],
+				commitMessage: 'chore: tidy up',
+			});
+
+			// ASSERT
+			// Nothing is deleted (server status is 'modified'), and the other project's file
+			// is never touched.
+			expect(sourceControlExportService.rmFilesFromExportFolder).toHaveBeenCalledWith(new Set());
+			const [staged, deleted] = gitService.stage.mock.calls[0];
+			expect(deleted).toEqual(new Set());
+			expect(staged).not.toContain(otherProjectPath);
+			// The authorized resource, at its server-derived path, is acted upon instead.
+			expect(staged).toContain(authorizedPath);
+		});
+
+		it('throws ForbiddenError when pushing a resource that is not allowed', async () => {
+			// ARRANGE
+			const user = mock<User>();
+			mockStatusService.getStatus.mockResolvedValueOnce([
+				{
+					id: 'authorized-wf',
+					name: 'Authorized Workflow',
+					type: 'workflow',
+					status: 'modified',
+					location: 'local',
+					conflict: false,
+					file: 'workflows/authorized-wf.json',
+					updatedAt: new Date().toISOString(),
+				},
+			]);
+			(isContainedWithin as jest.Mock).mockReturnValue(true);
+
+			// ACT & ASSERT
 			await expect(
 				sourceControlService.pushWorkfolder(user, {
 					fileNames: [
 						{
-							file: '/etc/passwd',
-							id: 'test',
-							name: 'secret-file',
-							type: 'file',
-							status: 'modified',
+							id: 'out-of-scope-wf',
+							type: 'workflow',
+							status: 'deleted',
+							file: 'workflows/out-of-scope-wf.json',
+							name: 'out-of-scope',
 							location: 'local',
 							conflict: false,
 							updatedAt: new Date().toISOString(),
-							pushed: false,
 						},
 					],
 				}),
-			).rejects.toThrow('File path /etc/passwd is invalid');
+			).rejects.toThrow('You are not allowed to push these changes');
 
+			expect(gitService.stage).not.toHaveBeenCalled();
+			expect(gitService.commit).not.toHaveBeenCalled();
+			expect(gitService.push).not.toHaveBeenCalled();
+		});
+
+		it('rejects the push when an authorized resource resolves outside the git folder', async () => {
+			// ARRANGE
+			// Even though the resource is authorized, its server-derived path escapes the git
+			// work folder. The defense-in-depth path validation must still reject the push.
+			const user = mock<User>();
+			mockStatusService.getStatus.mockResolvedValueOnce([
+				{
+					id: 'authorized-wf',
+					name: 'Authorized Workflow',
+					type: 'workflow',
+					status: 'modified',
+					location: 'local',
+					conflict: false,
+					file: '/outside-git/authorized-wf.json',
+					updatedAt: new Date().toISOString(),
+				},
+			]);
+			(isContainedWithin as jest.Mock).mockReturnValueOnce(false);
+
+			// ACT & ASSERT
+			await expect(
+				sourceControlService.pushWorkfolder(user, {
+					fileNames: [
+						{
+							id: 'authorized-wf',
+							type: 'workflow',
+							status: 'modified',
+							file: 'workflows/authorized-wf.json',
+							name: 'authorized',
+							location: 'local',
+							conflict: false,
+							updatedAt: new Date().toISOString(),
+						},
+					],
+				}),
+			).rejects.toThrow('File path /outside-git/authorized-wf.json is invalid');
+
+			expect(gitService.stage).not.toHaveBeenCalled();
+			expect(gitService.commit).not.toHaveBeenCalled();
+			expect(gitService.push).not.toHaveBeenCalled();
+		});
+
+		it('preserves a server-reported conflict when several status records share a (type, id)', async () => {
+			// ARRANGE
+			// Status returns two records for the same (type, id): the conflicting one first, so a
+			// de-duplication that kept only the last record would discard the conflict.
+			const user = mock<User>();
+			const now = new Date().toISOString();
+			mockStatusService.getStatus.mockResolvedValueOnce([
+				{
+					id: 'wf-1',
+					name: 'Workflow 1',
+					type: 'workflow',
+					status: 'modified',
+					location: 'local',
+					conflict: true,
+					file: 'workflows/wf-1.json',
+					updatedAt: now,
+				},
+				{
+					id: 'wf-1',
+					name: 'Workflow 1',
+					type: 'workflow',
+					status: 'modified',
+					location: 'local',
+					conflict: false,
+					file: 'workflows/wf-1.json',
+					updatedAt: now,
+				},
+			]);
+			(isContainedWithin as jest.Mock).mockReturnValue(true);
+
+			// ACT
+			const result = await sourceControlService.pushWorkfolder(user, {
+				fileNames: [
+					{
+						id: 'wf-1',
+						type: 'workflow',
+						status: 'modified',
+						file: 'workflows/wf-1.json',
+						name: 'Workflow 1',
+						location: 'local',
+						conflict: false,
+						updatedAt: now,
+					},
+				],
+			});
+
+			// ASSERT
+			// The conflict must surface as a 409 and block the push.
+			expect(result.statusCode).toBe(409);
 			expect(gitService.stage).not.toHaveBeenCalled();
 			expect(gitService.commit).not.toHaveBeenCalled();
 			expect(gitService.push).not.toHaveBeenCalled();

@@ -1,6 +1,6 @@
 {
   "name": "n8n-workflow",
-  "version": "1.120.13",
+  "version": "1.120.33",
   "description": "Workflow base code of n8n",
   "types": "dist/esm/index.d.ts",
   "module": "dist/esm/index.js",
@@ -52,7 +52,8 @@
   },
   "dependencies": {
     "@n8n/errors": "workspace:*",
-    "@n8n/tournament": "1.0.6",
+    "@n8n/expression-runtime": "workspace:*",
+    "@n8n/tournament": "1.11.1",
     "ast-types": "0.16.1",
     "callsites": "catalog:",
     "esprima-next": "5.8.4",

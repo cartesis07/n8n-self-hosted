@@ -34,6 +34,11 @@ export const isObjectEmpty = (obj: object | null | undefined): boolean => {
 
 export type Primitives = string | number | boolean | bigint | symbol | null | undefined;
 
+// Property keys that must never be copied onto a clone: assigning `__proto__`
+// reassigns the clone's prototype, and `constructor`/`prototype` can shadow
+// built-ins. Source data parsed from JSON can carry these as own properties.
+const reservedCopyKeys = new Set(['__proto__', 'constructor', 'prototype']);
+
 /* eslint-disable @typescript-eslint/no-explicit-any, @typescript-eslint/no-unsafe-assignment, @typescript-eslint/no-unsafe-member-access, @typescript-eslint/no-unsafe-return, @typescript-eslint/no-unsafe-argument */
 export const deepCopy = <T extends ((object | Date) & { toJSON?: () => string }) | Primitives>(
 	source: T,
@@ -66,7 +71,7 @@ export const deepCopy = <T extends ((object | Date) & { toJSON?: () => string })
 	const clone = Object.create(Object.getPrototypeOf({}));
 	hash.set(source, clone);
 	for (const i in source) {
-		if (hasOwnProp(i)) {
+		if (hasOwnProp(i) && !reservedCopyKeys.has(i)) {
 			clone[i] = deepCopy((source as any)[i], hash, path + `.${i}`);
 		}
 	}
@@ -193,6 +198,7 @@ export const replaceCircularReferences = <T>(value: T, knownObjects = new WeakSe
 	knownObjects.add(value);
 	const copy = (Array.isArray(value) ? [] : {}) as T;
 	for (const key in value) {
+		if (reservedCopyKeys.has(key)) continue;
 		try {
 			copy[key] = replaceCircularReferences(value[key], knownObjects);
 		} catch (error: unknown) {
@@ -348,6 +354,11 @@ const unsafeObjectProperties = new Set([
 	'prototype',
 	'constructor',
 	'getPrototypeOf',
+	'setPrototypeOf',
+	'getOwnPropertyDescriptor',
+	'getOwnPropertyDescriptors',
+	'defineProperty',
+	'defineProperties',
 	'mainModule',
 	'binding',
 	'_linkedBinding',
@@ -358,6 +369,7 @@ const unsafeObjectProperties = new Set([
 	'__defineGetter__',
 	'__defineSetter__',
 	'caller',
+	'callee',
 	'arguments',
 	'getBuiltinModule',
 	'dlopen',
@@ -373,6 +385,34 @@ const unsafeObjectProperties = new Set([
  */
 export function isSafeObjectProperty(property: string) {
 	return !unsafeObjectProperties.has(property);
+}
+
+/**
+ * Checks if a value can be used as an own key of a plain object: it has to be a string,
+ * and not a name that resolves to an inherited member.
+ *
+ * Use this where the key comes from data rather than from code — a node name, or a
+ * connection field in a stored workflow. `isSafeObjectProperty` is declared
+ * `(property: string)` but only tests the name, so a value that is not a string at
+ * runtime passes it and is then coerced by the bracket access that follows:
+ * `obj[['__proto__']]` writes to `obj['__proto__']`.
+ *
+ * It is a separate function on purpose. `isSafeObjectProperty` is also called with keys
+ * that are legitimately not strings, such as the numeric literal in `items[0]` while an
+ * expression is sanitised, so it cannot require a string itself.
+ */
+export function isUsableObjectKey(value: unknown): value is string {
+	return typeof value === 'string' && isSafeObjectProperty(value);
+}
+
+const unsafeObjectPropertyTokenPattern = new RegExp(
+	`\\b(?:${[...unsafeObjectProperties]
+		.map((p) => p.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'))
+		.join('|')})\\b`,
+);
+
+export function containsUnsafeObjectPropertyToken(input: string) {
+	return unsafeObjectPropertyTokenPattern.test(input);
 }
 
 /**
@@ -448,6 +488,52 @@ export function isDomainAllowed(
 		// If URL parsing fails, deny access to be safe
 		return false;
 	}
+}
+
+/** Hostname of an absolute URL, normalised for matching. `undefined` when there is none. */
+function toHostname(url: string | undefined): string | undefined {
+	if (!url) return undefined;
+	try {
+		return new URL(url).hostname.toLowerCase().replace(/\.$/, '') || undefined;
+	} catch {
+		return undefined;
+	}
+}
+
+/**
+ * Extracts the allow-listed domains configured on a credential via the
+ * `allowedHttpRequestDomains` + `allowedDomains` properties.
+ *
+ * Returns the comma-separated allow-list string when the credential is in
+ * 'domains' mode with a non-empty list, otherwise `undefined`. Callers that
+ * need to reject 'none' mode or an empty 'domains' list must handle that
+ * explicitly.
+ *
+ * Passing `nodeEndpointUrl` marks a credential-owned surface: one whose URL comes
+ * from a node definition rather than from the user. Its host joins the 'domains'
+ * allow-list, so a list the user wrote with the HTTP Request node in mind does not
+ * stop the credential working in the node it belongs to, and it stands in for an
+ * empty list. Pass it only for such a caller, never for a URL that arrives as
+ * request input.
+ */
+export function getCredentialAllowedDomains(
+	credentialData: Record<string, unknown> | undefined,
+	nodeEndpointUrl?: string,
+): string | undefined {
+	if (!credentialData || credentialData.allowedHttpRequestDomains !== 'domains') {
+		return undefined;
+	}
+	const endpointHost = toHostname(nodeEndpointUrl);
+	// A comma is a legal host character and would split into extra allow-list entries.
+	const ownHost = endpointHost?.includes(',') ? undefined : endpointHost;
+
+	const allowedDomains = credentialData.allowedDomains;
+	const trimmed = typeof allowedDomains === 'string' ? allowedDomains.trim() : '';
+	if (trimmed === '') return ownHost;
+	if (!ownHost || isDomainAllowed(`https://${ownHost}`, { allowedDomains: trimmed })) {
+		return trimmed;
+	}
+	return `${ownHost}, ${trimmed}`;
 }
 
 const COMMUNITY_PACKAGE_NAME_REGEX = /^(?!@n8n\/)(@[\w.-]+\/)?n8n-nodes-(?!base\b)\b\w+/g;

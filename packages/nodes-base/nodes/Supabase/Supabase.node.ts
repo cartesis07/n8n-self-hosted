@@ -11,9 +11,10 @@ import type {
 	INodeType,
 	INodeTypeDescription,
 } from 'n8n-workflow';
-import { NodeConnectionTypes, NodeOperationError } from 'n8n-workflow';
+import { NodeConnectionTypes, NodeOperationError, toPathSegment } from 'n8n-workflow';
 
 import {
+	appendFilterStringToEndpoint,
 	buildGetQuery,
 	buildOrQuery,
 	buildQuery,
@@ -175,7 +176,7 @@ export class Supabase implements INodeType {
 		const operation = this.getNodeParameter('operation', 0);
 
 		if (resource === 'row') {
-			const tableId = this.getNodeParameter('tableId', 0) as string;
+			const tableId = toPathSegment(this.getNodeParameter('tableId', 0));
 
 			if (operation === 'create') {
 				const records: IDataObject[] = [];
@@ -255,8 +256,8 @@ export class Supabase implements INodeType {
 						}
 
 						if (matchType === 'allFilters') {
-							const data = keys.reduce((obj, value) => buildQuery(obj, value), {});
-							Object.assign(qs, data);
+							const filters = keys.reduce(buildQuery, new Map<string, string>());
+							qs = Object.fromEntries(filters);
 						}
 						if (matchType === 'anyFilter') {
 							const data = keys.map((key) => buildOrQuery(key));
@@ -265,8 +266,7 @@ export class Supabase implements INodeType {
 					}
 
 					if (filterType === 'string') {
-						const filterString = this.getNodeParameter('filterString', i) as string;
-						endpoint = `${endpoint}?${encodeURI(filterString)}`;
+						endpoint = appendFilterStringToEndpoint(this, endpoint, i);
 					}
 
 					let rows;
@@ -307,8 +307,8 @@ export class Supabase implements INodeType {
 
 				for (let i = 0; i < length; i++) {
 					const keys = this.getNodeParameter('filters.conditions', i, []) as IDataObject[];
-					const data = keys.reduce((obj, value) => buildGetQuery(obj, value), {});
-					Object.assign(qs, data);
+					const filters = keys.reduce(buildGetQuery, new Map<string, string>());
+					qs = Object.fromEntries(filters);
 					let rows;
 
 					if (!keys.length) {
@@ -367,8 +367,7 @@ export class Supabase implements INodeType {
 					}
 
 					if (filterType === 'string') {
-						const filterString = this.getNodeParameter('filterString', i) as string;
-						endpoint = `${endpoint}?${encodeURI(filterString)}`;
+						endpoint = appendFilterStringToEndpoint(this, endpoint, i);
 					}
 
 					if (!returnAll) {
@@ -432,8 +431,8 @@ export class Supabase implements INodeType {
 						}
 
 						if (matchType === 'allFilters') {
-							const data = keys.reduce((obj, value) => buildQuery(obj, value), {});
-							Object.assign(qs, data);
+							const filters = keys.reduce(buildQuery, new Map<string, string>());
+							qs = Object.fromEntries(filters);
 						}
 						if (matchType === 'anyFilter') {
 							const data = keys.map((key) => buildOrQuery(key));
@@ -442,8 +441,7 @@ export class Supabase implements INodeType {
 					}
 
 					if (filterType === 'string') {
-						const filterString = this.getNodeParameter('filterString', i) as string;
-						endpoint = `${endpoint}?${encodeURI(filterString)}`;
+						endpoint = appendFilterStringToEndpoint(this, endpoint, i);
 					}
 
 					const record: IDataObject = {};
