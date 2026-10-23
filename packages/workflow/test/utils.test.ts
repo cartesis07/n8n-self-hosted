@@ -4,14 +4,17 @@ import { ManualExecutionCancelledError } from '../src/errors/execution-cancelled
 import {
 	jsonParse,
 	jsonStringify,
+	replaceCircularReferences,
 	deepCopy,
 	isDomainAllowed,
+	getCredentialAllowedDomains,
 	isObjectEmpty,
 	fileTypeFromMimeType,
 	randomInt,
 	randomString,
 	hasKey,
 	isSafeObjectProperty,
+	containsUnsafeObjectPropertyToken,
 	setSafeObjectProperty,
 	sleepWithAbort,
 	isCommunityPackageName,
@@ -266,6 +269,20 @@ describe('jsonStringify', () => {
 	});
 });
 
+describe('replaceCircularReferences', () => {
+	it('should not promote an own __proto__ key onto the copy', () => {
+		const source = jsonParse<{ note: string; id?: string }>(
+			'{"note":"x","__proto__":{"id":"injected"}}',
+		);
+
+		const copy = replaceCircularReferences(source);
+
+		expect(copy.note).toBe('x');
+		expect(copy.id).toBeUndefined();
+		expect(Object.getPrototypeOf(copy)).toBe(Object.prototype);
+	});
+});
+
 describe('deepCopy', () => {
 	it('should deep copy an object', () => {
 		const serializable = {
@@ -341,6 +358,45 @@ describe('deepCopy', () => {
 		expect(copy.deep.props.circular).not.toBe(object);
 		expect(copy.deep.arr.slice(-1)[0]).toBe(copy);
 		expect(copy.deep.arr.slice(-1)[0]).not.toBe(object);
+	});
+
+	it('should not promote an own __proto__ key onto the clone', () => {
+		// An object literal `{ __proto__: ... }` sets the prototype; only parsed
+		// JSON produces an own enumerable `__proto__` property, as a request body would.
+		const source = jsonParse<{ note: string; id?: string }>(
+			'{"note":"x","__proto__":{"id":"injected"}}',
+		);
+
+		const copy = deepCopy(source);
+
+		expect(copy.note).toBe('x');
+		expect(copy.id).toBeUndefined();
+		expect(Object.getPrototypeOf(copy)).toBe(Object.prototype);
+	});
+
+	it('should not copy own constructor or prototype keys onto the clone', () => {
+		const source = jsonParse<{ keep: string }>(
+			'{"keep":"y","constructor":{"polluted":true},"prototype":{"polluted":true}}',
+		);
+
+		const copy = deepCopy(source);
+
+		expect(copy.keep).toBe('y');
+		expect(Object.prototype.hasOwnProperty.call(copy, 'constructor')).toBe(false);
+		expect(Object.prototype.hasOwnProperty.call(copy, 'prototype')).toBe(false);
+		expect(copy.constructor).toBe(Object);
+	});
+
+	it('should not promote a nested own __proto__ key', () => {
+		const source = jsonParse<{ body: { note: string; id?: string } }>(
+			'{"body":{"note":"x","__proto__":{"id":"injected"}}}',
+		);
+
+		const copy = deepCopy(source);
+
+		expect(copy.body.note).toBe('x');
+		expect(copy.body.id).toBeUndefined();
+		expect(Object.getPrototypeOf(copy.body)).toBe(Object.prototype);
 	});
 });
 
@@ -511,6 +567,11 @@ describe('isSafeObjectProperty', () => {
 		['prototype', false],
 		['constructor', false],
 		['getPrototypeOf', false],
+		['setPrototypeOf', false],
+		['getOwnPropertyDescriptor', false],
+		['getOwnPropertyDescriptors', false],
+		['defineProperty', false],
+		['defineProperties', false],
 		['mainModule', false],
 		['binding', false],
 		['_load', false],
@@ -519,6 +580,31 @@ describe('isSafeObjectProperty', () => {
 		['toString', true],
 	])('should return %s for key "%s"', (key, expected) => {
 		expect(isSafeObjectProperty(key)).toBe(expected);
+	});
+});
+
+describe('containsUnsafeObjectPropertyToken', () => {
+	it.each([
+		['constructor', true],
+		['__proto__', true],
+		['prototype', true],
+		['getPrototypeOf', true],
+		['setPrototypeOf', true],
+		['getOwnPropertyDescriptor', true],
+		['getOwnPropertyDescriptors', true],
+		['defineProperty', true],
+		['defineProperties', true],
+		['mainModule', true],
+		['user.constructor', true],
+		['"constructor"', true],
+		['a.b."__proto__".c', true],
+		['user.name', false],
+		['items[0].title', false],
+		['constructorName', false],
+		['myPrototypeId', false],
+		['', false],
+	])('should return %s for "%s"', (input, expected) => {
+		expect(containsUnsafeObjectPropertyToken(input)).toBe(expected);
 	});
 });
 
@@ -825,6 +911,160 @@ describe('isDomainAllowed', () => {
 					allowedDomains: 'example.com',
 				}),
 			).toBe(false);
+		});
+	});
+});
+
+describe('getCredentialAllowedDomains', () => {
+	it("returns the allowed domains list in 'domains' mode with a non-empty list", () => {
+		expect(
+			getCredentialAllowedDomains({
+				allowedHttpRequestDomains: 'domains',
+				allowedDomains: 'example.com, *.api.io',
+			}),
+		).toBe('example.com, *.api.io');
+	});
+
+	it('trims surrounding whitespace from the list', () => {
+		expect(
+			getCredentialAllowedDomains({
+				allowedHttpRequestDomains: 'domains',
+				allowedDomains: '  example.com  ',
+			}),
+		).toBe('example.com');
+	});
+
+	it("returns undefined in 'domains' mode when the list is empty or whitespace", () => {
+		expect(
+			getCredentialAllowedDomains({
+				allowedHttpRequestDomains: 'domains',
+				allowedDomains: '',
+			}),
+		).toBeUndefined();
+
+		expect(
+			getCredentialAllowedDomains({
+				allowedHttpRequestDomains: 'domains',
+				allowedDomains: '   ',
+			}),
+		).toBeUndefined();
+	});
+
+	it("returns undefined in 'domains' mode when the list is not a string", () => {
+		expect(
+			getCredentialAllowedDomains({
+				allowedHttpRequestDomains: 'domains',
+				allowedDomains: undefined,
+			}),
+		).toBeUndefined();
+	});
+
+	it("returns undefined when mode is 'all' or 'none'", () => {
+		expect(
+			getCredentialAllowedDomains({
+				allowedHttpRequestDomains: 'all',
+				allowedDomains: 'example.com',
+			}),
+		).toBeUndefined();
+
+		expect(
+			getCredentialAllowedDomains({
+				allowedHttpRequestDomains: 'none',
+				allowedDomains: 'example.com',
+			}),
+		).toBeUndefined();
+	});
+
+	it('returns undefined when the credential is undefined or missing the restriction field', () => {
+		expect(getCredentialAllowedDomains(undefined)).toBeUndefined();
+		expect(getCredentialAllowedDomains({})).toBeUndefined();
+	});
+
+	describe('nodeEndpointUrl', () => {
+		const domainsCredential = {
+			allowedHttpRequestDomains: 'domains',
+			allowedDomains: 'other.example.com',
+		};
+
+		it("adds the node's own host to a 'domains' allowlist that omits it", () => {
+			expect(getCredentialAllowedDomains(domainsCredential, 'https://api.example.com/v2')).toBe(
+				'api.example.com, other.example.com',
+			);
+		});
+
+		it("does not duplicate the node's own host when the allowlist already covers it", () => {
+			expect(
+				getCredentialAllowedDomains(
+					{
+						allowedHttpRequestDomains: 'domains',
+						allowedDomains: 'other.example.com, API.Example.com',
+					},
+					'https://api.example.com/v2',
+				),
+			).toBe('other.example.com, API.Example.com');
+		});
+
+		it('strips the port from the node host it adds', () => {
+			expect(
+				getCredentialAllowedDomains(domainsCredential, 'https://api.example.com:8443/v2'),
+			).toBe('api.example.com, other.example.com');
+		});
+
+		it('does not add a host containing a comma, which would split the list', () => {
+			expect(getCredentialAllowedDomains(domainsCredential, 'https://one,two.example.com/v2')).toBe(
+				'other.example.com',
+			);
+		});
+
+		it('treats a wildcard entry as already covering the node host', () => {
+			expect(
+				getCredentialAllowedDomains(
+					{ allowedHttpRequestDomains: 'domains', allowedDomains: '*.example.com' },
+					'https://api.example.com/v2',
+				),
+			).toBe('*.example.com');
+		});
+
+		it.each([
+			['empty', '   '],
+			['missing', undefined],
+		])(
+			"falls back to the node's own host when the 'domains' list is %s",
+			(_label, allowedDomains) => {
+				expect(
+					getCredentialAllowedDomains(
+						{ allowedHttpRequestDomains: 'domains', allowedDomains },
+						'https://api.example.com/v2',
+					),
+				).toBe('api.example.com');
+			},
+		);
+
+		it("still returns undefined for an empty 'domains' list when there is no node host", () => {
+			expect(
+				getCredentialAllowedDomains({ allowedHttpRequestDomains: 'domains', allowedDomains: '' }),
+			).toBeUndefined();
+		});
+
+		it.each([
+			['an unresolved expression', '={{$credentials.baseUrl}}'],
+			['a relative path', '/api/v2'],
+			['a scheme with no host', 'https://'],
+			['an empty string', ''],
+			['undefined', undefined],
+		])('widens nothing when the node endpoint is %s', (_label, nodeEndpointUrl) => {
+			expect(getCredentialAllowedDomains(domainsCredential, nodeEndpointUrl)).toBe(
+				'other.example.com',
+			);
+		});
+
+		it.each([
+			["'all'", 'all'],
+			["'none'", 'none'],
+		])('ignores the node endpoint in %s mode', (_label, allowedHttpRequestDomains) => {
+			expect(
+				getCredentialAllowedDomains({ allowedHttpRequestDomains }, 'https://api.example.com/v2'),
+			).toBeUndefined();
 		});
 	});
 });

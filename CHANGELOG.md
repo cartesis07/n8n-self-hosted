@@ -1,3 +1,302 @@
+## [1.123.87](https://github.com/n8n-io/n8n/compare/n8n@1.123.86...n8n@1.123.87) (2026-10-23)
+
+
+## [1.123.86](https://github.com/n8n-io/n8n/compare/n8n@1.123.85...n8n@1.123.86) (2026-10-22)
+
+
+### Bug Fixes
+
+* **deps:** bump sharp to 0.35.5 on 1.x (DEVP-1241) ([9fa95f0](https://github.com/n8n-io/n8n/commit/9fa95f0cff15ddde5ea56277207d54602b33fa78))
+
+
+## [1.123.85](https://github.com/n8n-io/n8n/compare/n8n@1.123.84...n8n@1.123.85) (2026-10-14)
+
+
+## [1.123.84](https://github.com/n8n-io/n8n/compare/n8n@1.123.83...n8n@1.123.84) (2026-10-08)
+
+
+## [1.123.83](https://github.com/n8n-io/n8n/compare/n8n@1.123.82...n8n@1.123.83) (2026-09-30)
+
+
+### Bug Fixes
+
+* Pin cjs-module-lexer 2.2.0 to address review finding ([76e467d](https://github.com/n8n-io/n8n/commit/76e467dc14c2522432aa692f824d80a5d5f70c59))
+
+
+## [1.123.82](https://github.com/n8n-io/n8n/compare/n8n@1.123.81...n8n@1.123.82) (2026-09-25)
+
+
+### Bug Fixes
+
+* bump adm-zip to 0.6.1 ([de771f0](https://github.com/n8n-io/n8n/commit/de771f0aa433ea66820d4cc02e8a426d7e7573df))
+
+
+## [1.123.81](https://github.com/n8n-io/n8n/compare/n8n@1.123.80...n8n@1.123.81) (2026-09-17)
+
+
+### Bug Fixes
+
+* **core:** Allow a domain-restricted credential to work in its own node ([#38786](https://github.com/n8n-io/n8n/issues/38786)) ([7e98622](https://github.com/n8n-io/n8n/commit/7e9862219b2e8f4d72792090048b543fef82fd1a))
+* **core:** Update undici to 7.29.1 ([#38849](https://github.com/n8n-io/n8n/issues/38849)) ([3357ecc](https://github.com/n8n-io/n8n/commit/3357ecc57f319e945b307020c69b5362ab59509b))
+* **core:** Update vm2 to 3.12.2 ([#38846](https://github.com/n8n-io/n8n/issues/38846)) ([b3b77aa](https://github.com/n8n-io/n8n/commit/b3b77aa5baff272ef9f83775672cff163e4e4b20))
+* **Snowflake Node:** Update the Snowflake SDK to 3.3.0 ([#38831](https://github.com/n8n-io/n8n/issues/38831)) ([1281ee6](https://github.com/n8n-io/n8n/commit/1281ee644402441d9c59d4dd6dca8a54a12acaec))
+
+
+## [1.123.80](https://github.com/n8n-io/n8n/compare/n8n@1.123.79...n8n@1.123.80) (2026-09-16)
+
+
+### Bug Fixes
+
+* **core:** Apply credential allowed domains in declarative node requests ([#38723](https://github.com/n8n-io/n8n/issues/38723)) ([35ffb88](https://github.com/n8n-io/n8n/commit/35ffb8881e967ca8937643497177335839be41ac))
+
+
+## [1.123.79](https://github.com/n8n-io/n8n/compare/n8n@1.123.77...n8n@1.123.79) (2026-09-10)
+
+
+## [1.123.77](https://github.com/n8n-io/n8n/compare/n8n@1.123.76...n8n@1.123.77) (2026-09-03)
+
+
+## [1.123.76](https://github.com/n8n-io/n8n/compare/n8n@1.123.75...n8n@1.123.76) (2026-09-02)
+
+
+### Bug Fixes
+
+* **core:** Bump browserslist to 4.28.7 to clear CVE-2026-73088/73089 ([9de4cce](https://github.com/n8n-io/n8n/commit/9de4ccefcf623a1a3917532fa155a2410019204c))
+
+
+## [1.123.75](https://github.com/n8n-io/n8n/compare/n8n@1.123.74...n8n@1.123.75) (2026-08-21)
+
+
+### Bug Fixes
+
+* **core:** Normalize env values before schema-based parsing ([#36733](https://github.com/n8n-io/n8n/issues/36733)) ([5c9153e](https://github.com/n8n-io/n8n/commit/5c9153e013b33d6f0f8557716ea1ab0c353435fe))
+* **core:** Only init the expression engine for commands that evaluate expressions ([#36649](https://github.com/n8n-io/n8n/issues/36649)) ([16a8676](https://github.com/n8n-io/n8n/commit/16a867684aa8f95a9fba92bce50bb5ddf8bd1962))
+* **core:** Release test-webhook isolate only after teardown completes ([#36633](https://github.com/n8n-io/n8n/issues/36633)) ([a75e5ed](https://github.com/n8n-io/n8n/commit/a75e5ed20a5e59be33df846a68842e89455bb012))
+* **core:** Wrap a trigger's closeFunction in an expression isolate at creation time ([#36699](https://github.com/n8n-io/n8n/issues/36699)) ([fccd046](https://github.com/n8n-io/n8n/commit/fccd046c97b97a4b55ba66bce725d793b94c1f39))
+
+
+## [1.123.74](https://github.com/n8n-io/n8n/compare/n8n@1.123.73...n8n@1.123.74) (2026-08-20)
+
+
+### Bug Fixes
+
+* **core:** CAT-3451 ([#36593](https://github.com/n8n-io/n8n/issues/36593)) ([951edd7](https://github.com/n8n-io/n8n/commit/951edd783a596cc9d5f0913e6100cb1e70609cbc))
+
+
+## [1.123.73](https://github.com/n8n-io/n8n/compare/n8n@1.123.72...n8n@1.123.73) (2026-08-19)
+
+
+### Bug Fixes
+
+* **core:** Acquire expression isolate for dynamic node parameter requests ([#36494](https://github.com/n8n-io/n8n/issues/36494)) ([4ee48e6](https://github.com/n8n-io/n8n/commit/4ee48e61a16e5730306556f1e79f1b4f32c8104f))
+
+
+### Features
+
+* **core:** Make the vm expression engine the default on 1.x ([#36498](https://github.com/n8n-io/n8n/issues/36498)) ([75bedd8](https://github.com/n8n-io/n8n/commit/75bedd8eaf5ff2a04504c9973d019b787cb6c149))
+
+
+## [1.123.72](https://github.com/n8n-io/n8n/compare/n8n@1.123.71...n8n@1.123.72) (2026-08-17)
+
+
+## [1.123.71](https://github.com/n8n-io/n8n/compare/n8n@1.123.70...n8n@1.123.71) (2026-08-13)
+
+
+## [1.123.70](https://github.com/n8n-io/n8n/compare/n8n@1.123.69...n8n@1.123.70) (2026-08-12)
+
+
+### Bug Fixes
+
+* Bump adm-zip from 0.5.10 to 0.6.0 via pnpm override ([c4d602e](https://github.com/n8n-io/n8n/commit/c4d602e3bec0e61267830e9c5fe079628981e9a4))
+* Bump tar from 7.5.16 to 7.5.21 via pnpm override ([d97e715](https://github.com/n8n-io/n8n/commit/d97e7153b5557c3c653a1bd5377645e07727a31c))
+* Bump undici from 7.28.0 to 7.29.0 via pnpm override ([ab2a6bf](https://github.com/n8n-io/n8n/commit/ab2a6bf9916d28cd9501b0b52cc93d70983b60cc))
+* **core:** Bump fast-uri from 3.1.2 to 3.1.5 ([8e4e278](https://github.com/n8n-io/n8n/commit/8e4e278055b2d8d62402d136d288d0a0f66fd0db))
+* **core:** Stop scheduled poll ticks from releasing the activation's expression isolate ([#35934](https://github.com/n8n-io/n8n/issues/35934)) ([ae489a6](https://github.com/n8n-io/n8n/commit/ae489a6adbab92d35539ebd7708492a7a36991ae))
+
+
+## [1.123.69](https://github.com/n8n-io/n8n/compare/n8n@1.123.68...n8n@1.123.69) (2026-08-05)
+
+
+### Bug Fixes
+
+* **editor:** Improve resource locator link preview handling ([#35570](https://github.com/n8n-io/n8n/issues/35570)) ([7fd9a6e](https://github.com/n8n-io/n8n/commit/7fd9a6ef4e439294e17f0188f01b6fb81415e6b8))
+
+
+## [1.123.68](https://github.com/n8n-io/n8n/compare/n8n@1.123.67...n8n@1.123.68) (2026-08-03)
+
+
+### Bug Fixes
+
+* **Onfleet Trigger Node:** Fix content type issue (backport 1.x) ([#24878](https://github.com/n8n-io/n8n/issues/24878)) ([a71b153](https://github.com/n8n-io/n8n/commit/a71b153f7095d9aa144dd7209945a614ff2781f0))
+
+
+## [1.123.67](https://github.com/n8n-io/n8n/compare/n8n@1.123.66...n8n@1.123.67) (2026-07-22)
+
+
+## [1.123.66](https://github.com/n8n-io/n8n/compare/n8n@1.123.65...n8n@1.123.66) (2026-07-17)
+
+
+### Bug Fixes
+
+* **Code Node:** External modules not working even when allowed in n8n version 1.x ([#34093](https://github.com/n8n-io/n8n/issues/34093)) ([beb673e](https://github.com/n8n-io/n8n/commit/beb673e21995029b833fac3a76ae31277272c664))
+
+
+## [1.123.65](https://github.com/n8n-io/n8n/compare/n8n@1.123.64...n8n@1.123.65) (2026-07-13)
+
+
+### Bug Fixes
+
+* **core:** Settle webhook execution promise on early errors ([#33998](https://github.com/n8n-io/n8n/issues/33998)) ([ec985f4](https://github.com/n8n-io/n8n/commit/ec985f4bf5cd771b18ab4e922c5da350884ebc55))
+
+
+## [1.123.64](https://github.com/n8n-io/n8n/compare/n8n@1.123.63...n8n@1.123.64) (2026-07-08)
+
+
+## [1.123.63](https://github.com/n8n-io/n8n/compare/n8n@1.123.62...n8n@1.123.63) (2026-07-02)
+
+
+### Bug Fixes
+
+* **core:** Preserve Date values passed to the expression isolate ([#33364](https://github.com/n8n-io/n8n/issues/33364)) ([0e04591](https://github.com/n8n-io/n8n/commit/0e0459163918118006b5b0eec2b8cc18cf05613d))
+
+
+## [1.123.62](https://github.com/n8n-io/n8n/compare/n8n@1.123.61...n8n@1.123.62) (2026-06-29)
+
+
+### Bug Fixes
+
+* Fix 5 security issues in hono, vue-i18n, linkify-it ([#33164](https://github.com/n8n-io/n8n/issues/33164)) ([e325585](https://github.com/n8n-io/n8n/commit/e325585aacfff869ff2e7fa631e812d17f086e1b))
+
+
+## [1.123.61](https://github.com/n8n-io/n8n/compare/n8n@1.123.60...n8n@1.123.61) (2026-06-24)
+
+
+## [1.123.60](https://github.com/n8n-io/n8n/compare/n8n@1.123.59...n8n@1.123.60) (2026-06-22)
+
+
+### Bug Fixes
+
+* **core:** Exclude error workflow executions from billable execution count ([#32544](https://github.com/n8n-io/n8n/issues/32544)) ([f3fbfb0](https://github.com/n8n-io/n8n/commit/f3fbfb02b15196d7343c82987b1d23d35084f08a))
+* Fix 21 security issues in tmp, protobufjs, ws and 8 more ([#32687](https://github.com/n8n-io/n8n/issues/32687)) ([bf85807](https://github.com/n8n-io/n8n/commit/bf85807195726801399394d440188300b9f2f4a1))
+* Fix 5 security issues in tmp, ws, axios and 1 more ([#32706](https://github.com/n8n-io/n8n/issues/32706)) ([68fb550](https://github.com/n8n-io/n8n/commit/68fb55078e03561dfa83ae4808ec2d3ab0dabe86))
+
+
+## [1.123.59](https://github.com/n8n-io/n8n/compare/n8n@1.123.58...n8n@1.123.59) (2026-06-19)
+
+
+## [1.123.58](https://github.com/n8n-io/n8n/compare/n8n@1.123.57...n8n@1.123.58) (2026-06-18)
+
+
+### Bug Fixes
+
+* **core:** Account for pending CSV uploads in data-table size budget ([#32494](https://github.com/n8n-io/n8n/issues/32494)) ([0dc6ded](https://github.com/n8n-io/n8n/commit/0dc6ded7008a4b47c84809cc5078f09bb2f487e6))
+* Upgrade uuid to 11.1.1 to address advisories (1.x) ([#32511](https://github.com/n8n-io/n8n/issues/32511)) ([7336c56](https://github.com/n8n-io/n8n/commit/7336c565e17ee3ca6435bb196542531f2ef70e9b))
+
+
+## [1.123.57](https://github.com/n8n-io/n8n/compare/n8n@1.123.56...n8n@1.123.57) (2026-06-17)
+
+
+### Bug Fixes
+
+* Fix 5 security issues in @grpc/grpc-js, hono, vue-i18n ([#32280](https://github.com/n8n-io/n8n/issues/32280)) ([bc80d6e](https://github.com/n8n-io/n8n/commit/bc80d6e3b3048bc42a8a72ec5dc7df0d87652e75))
+
+
+## [1.123.56](https://github.com/n8n-io/n8n/compare/n8n@1.123.55...n8n@1.123.56) (2026-06-15)
+
+
+### Bug Fixes
+
+* Fix 5 security issues in hono, vue-i18n ([#31882](https://github.com/n8n-io/n8n/issues/31882)) ([bb369bc](https://github.com/n8n-io/n8n/commit/bb369bcaf2c5061103af044fee8cadb29be9ad1c))
+
+
+## [1.123.54](https://github.com/n8n-io/n8n/compare/n8n@1.123.53...n8n@1.123.54) (2026-06-08)
+
+
+### Bug Fixes
+
+* **core:** Insights page shows paywall for licensed users due to posthog init failing [1.x backport] ([#31889](https://github.com/n8n-io/n8n/issues/31889)) ([4412736](https://github.com/n8n-io/n8n/commit/44127368bbf05bae13a7c2e4a825bc76fa1ca1a3))
+* Fix 9 security issues in samlify, tmp, fengari and 7 more ([#31785](https://github.com/n8n-io/n8n/issues/31785)) ([68aade4](https://github.com/n8n-io/n8n/commit/68aade41acff4df996cf20a168429941fcaf6038))
+
+
+## [1.123.53](https://github.com/n8n-io/n8n/compare/n8n@1.123.52...n8n@1.123.53) (2026-06-05)
+
+
+### Bug Fixes
+
+* Backport bumps ([#31727](https://github.com/n8n-io/n8n/issues/31727)) ([410418a](https://github.com/n8n-io/n8n/commit/410418a741e5b703a61ab968e8beda6f70fc0593))
+
+
+## [1.123.52](https://github.com/n8n-io/n8n/compare/n8n@1.123.51...n8n@1.123.52) (2026-06-04)
+
+
+### Bug Fixes
+
+* **core:** Reject unsafe property tokens in in-isolate $jmespath ([#31643](https://github.com/n8n-io/n8n/issues/31643)) ([08de252](https://github.com/n8n-io/n8n/commit/08de252a0f49d452cbceb916370ab705ad08155f))
+* **core:** Report only error class and stack for unhandled node errors ([#31640](https://github.com/n8n-io/n8n/issues/31640)) ([fbb9005](https://github.com/n8n-io/n8n/commit/fbb90050c160ef51184e9676bffb8cf0f1ba5be8))
+
+
+## [1.123.51](https://github.com/n8n-io/n8n/compare/n8n@1.123.50...n8n@1.123.51) (2026-06-03)
+
+
+### Bug Fixes
+
+* **core:** Quiet VM expression engine logs on the happy path ([#31566](https://github.com/n8n-io/n8n/issues/31566)) ([1c35031](https://github.com/n8n-io/n8n/commit/1c350312abbef4312507c9d0990f271f2da9f6a9))
+* **core:** Re-register expression metrics after Prometheus registry reset ([#31567](https://github.com/n8n-io/n8n/issues/31567)) ([497bf6b](https://github.com/n8n-io/n8n/commit/497bf6b6e130d504c42bdd7b1d35b25961b16db6))
+
+
+## [1.123.50](https://github.com/n8n-io/n8n/compare/n8n@1.123.49...n8n@1.123.50) (2026-06-01)
+
+
+### Bug Fixes
+
+* **core:** Add configurable retries and error details to S3 ([#29810](https://github.com/n8n-io/n8n/issues/29810)) ([83023cc](https://github.com/n8n-io/n8n/commit/83023cce28ecec4baa6ca499635cd4ecd9c4d88b))
+
+
+## [1.123.49](https://github.com/n8n-io/n8n/compare/n8n@1.123.48...n8n@1.123.49) (2026-05-28)
+
+
+### Bug Fixes
+
+* **core:** Drain webhook close functions to prevent MCP connection leaks ([#31188](https://github.com/n8n-io/n8n/issues/31188)) ([69b2fbd](https://github.com/n8n-io/n8n/commit/69b2fbd1027691c7aa723d1a31db16a74ec5fb91))
+
+
+## [1.123.48](https://github.com/n8n-io/n8n/compare/n8n@1.123.47...n8n@1.123.48) (2026-05-27)
+
+
+## [1.123.47](https://github.com/n8n-io/n8n/compare/n8n@1.123.46...n8n@1.123.47) (2026-05-25)
+
+
+### Bug Fixes
+
+* Fix 16 security issues in vm2, ws, protobufjs and 4 more ([#30852](https://github.com/n8n-io/n8n/issues/30852)) ([0ec59b6](https://github.com/n8n-io/n8n/commit/0ec59b6e43e0411f5af174e8cccd356de7f3be85))
+* Fix security issue in urllib3 via minor version upgrade from 2.6.3 to 2.7.0 in packages ([#31058](https://github.com/n8n-io/n8n/issues/31058)) ([7ac1341](https://github.com/n8n-io/n8n/commit/7ac134188eb3331a348050dcc6ba68d57f155fa4))
+
+
+## [1.123.46](https://github.com/n8n-io/n8n/compare/n8n@1.123.45...n8n@1.123.46) (2026-05-21)
+
+
+### Bug Fixes
+
+* **core:** Require admin push when migrating legacy environments to projects folder ([#30530](https://github.com/n8n-io/n8n/issues/30530)) ([96a0380](https://github.com/n8n-io/n8n/commit/96a0380a6d3ff6cdfa1770bf90a5fa4cfd84ae8f))
+
+
+## [1.123.45](https://github.com/n8n-io/n8n/compare/n8n@1.123.44...n8n@1.123.45) (2026-05-20)
+
+
+### Bug Fixes
+
+* **core:** Limit Insights compaction runs ([#30629](https://github.com/n8n-io/n8n/issues/30629)) ([5ce4ce3](https://github.com/n8n-io/n8n/commit/5ce4ce36cfbdf24a8f64d84647bba7b413b46b16))
+* Fix security issue in langsmith via minor version upgrade from 0.5.19 to 0.6.0 ([#30684](https://github.com/n8n-io/n8n/issues/30684)) ([e1c9c21](https://github.com/n8n-io/n8n/commit/e1c9c2123f45eaa96b54cdd2a99234b51cfc8f1f))
+
+
+## [1.123.44](https://github.com/n8n-io/n8n/compare/n8n@1.123.43...n8n@1.123.44) (2026-05-18)
+
+
+### Bug Fixes
+
+* Fix 11 critical issues in vm2, protobufjs, langsmith and 1 more ([#30563](https://github.com/n8n-io/n8n/issues/30563)) ([c4f3a10](https://github.com/n8n-io/n8n/commit/c4f3a1056eac1472c63efcb6cbe7f08590c32c53))
+
+
 ## [1.123.43](https://github.com/n8n-io/n8n/compare/n8n@1.123.42...n8n@1.123.43) (2026-05-13)
 
 

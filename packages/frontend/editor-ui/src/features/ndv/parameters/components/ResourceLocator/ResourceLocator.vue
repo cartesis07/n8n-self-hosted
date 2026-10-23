@@ -54,6 +54,7 @@ import {
 	type FromAIOverride,
 } from '../../utils/fromAIOverride.utils';
 import { completeExpressionSyntax } from '@/app/utils/expressions';
+import { openSafeUrl } from '@/app/utils/htmlUtils';
 import { useProjectsStore } from '@/features/collaboration/projects/projects.store';
 import FromAiOverrideButton from '../ParameterInputOverrides/FromAiOverrideButton.vue';
 import FromAiOverrideField from '../ParameterInputOverrides/FromAiOverrideField.vue';
@@ -267,7 +268,9 @@ const urlValue = computed(() => {
 
 	if (currentMode.value.url) {
 		const value = props.isValueExpression ? props.expressionComputedValue : valueToDisplay.value;
-		if (typeof value === 'string') {
+		// The value is spliced into the mode's url expression template and resolved,
+		// so only build a link from a literal value, never one carrying `{{ }}`.
+		if (typeof value === 'string' && !value.includes('{{') && !value.includes('}}')) {
 			const expression = currentMode.value.url.replace(/\{\{\$value\}\}/g, value);
 			const resolved = workflowHelpers.resolveExpression(expression);
 
@@ -552,7 +555,7 @@ function onKeyDown(e: KeyboardEvent) {
 }
 
 function openResource(url: string) {
-	window.open(url, '_blank');
+	openSafeUrl(url);
 	trackEvent('User clicked resource locator link');
 }
 
@@ -1136,7 +1139,11 @@ function removeOverride() {
 						:class="$style['parameter-issues']"
 					/>
 					<div v-else-if="urlValue" :class="$style.openResourceLink">
-						<N8nLink theme="text" @click.stop="openResource(urlValue)">
+						<N8nLink
+							theme="text"
+							data-test-id="rlc-open-resource-link"
+							@click.stop="openResource(urlValue)"
+						>
 							<N8nIcon icon="external-link" :title="getLinkAlt(valueToDisplay)" />
 						</N8nLink>
 					</div>

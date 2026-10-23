@@ -278,7 +278,7 @@ describe('Form Node', () => {
 					if (paramName === 'operation') return 'completion';
 					if (paramName === 'useJson') return false;
 					if (paramName === 'jsonOutput') return '[]';
-					if (paramName === 'respondWith') return 'text';
+					if (paramName === 'respondWith') return 'showText';
 					if (paramName === 'completionTitle') return 'Test Title';
 					if (paramName === 'completionMessage') return 'Test Message';
 					if (paramName === 'redirectUrl') return '';
@@ -487,7 +487,7 @@ describe('Form Node', () => {
 				if (paramName === 'operation') return 'completion';
 				if (paramName === 'useJson') return false;
 				if (paramName === 'jsonOutput') return '[]';
-				if (paramName === 'respondWith') return 'text';
+				if (paramName === 'respondWith') return 'redirect';
 				if (paramName === 'completionTitle') return 'Test Title';
 				if (paramName === 'completionMessage') return 'Test Message';
 				if (paramName === 'redirectUrl') return 'https://n8n.io';
@@ -511,6 +511,7 @@ describe('Form Node', () => {
 				redirect: jest.fn(),
 				send: jest.fn(),
 				setHeader: jest.fn(),
+				removeHeader: jest.fn(),
 			};
 			mockWebhookFunctions.getResponseObject.mockReturnValue(
 				mockResponseObject as unknown as Response,
@@ -520,6 +521,7 @@ describe('Form Node', () => {
 			const result = await form.webhook(mockWebhookFunctions);
 
 			expect(result).toEqual({ noWebhookResponse: true });
+			expect(mockResponseObject.removeHeader).toHaveBeenCalledWith('Content-Security-Policy');
 			expect(mockResponseObject.render).toHaveBeenCalledWith('form-trigger-completion', {
 				appendAttribution: 'test',
 				formTitle: 'test',

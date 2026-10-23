@@ -11,6 +11,7 @@ export * from './data-table.types';
 export * from './deferred-promise';
 export * from './execution-context';
 export * from './execution-context-establishment-hooks';
+export * from './safe-regex';
 export * from './global-state';
 export * from './interfaces';
 export * from './run-execution-data-factory';
@@ -21,6 +22,7 @@ export * from './expressions/expression-helpers';
 export * from './from-ai-parse-utils';
 export * from './node-helpers';
 export * from './tool-helpers';
+export * from './url';
 export * from './node-reference-parser-utils';
 export * from './metadata-utils';
 export * from './workflow';
@@ -48,8 +50,10 @@ export {
 	randomInt,
 	randomString,
 	isSafeObjectProperty,
+	isUsableObjectKey,
 	setSafeObjectProperty,
 	isDomainAllowed,
+	getCredentialAllowedDomains,
 	isCommunityPackageName,
 	sanitizeFilename,
 	sanitizeXmlName,

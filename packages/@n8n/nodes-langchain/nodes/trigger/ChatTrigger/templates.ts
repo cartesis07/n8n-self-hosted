@@ -2,9 +2,12 @@ import sanitizeHtml from 'sanitize-html';
 
 import type { AuthenticationChatOption, LoadPreviousSessionChatOption } from './types';
 
-function sanitizeUserInput(input: string): string {
+function sanitizeUserInput(input: unknown): string {
+	// Only strings and numbers are meaningful display values; sanitize-html
+	// requires a string input, so coerce numbers and drop everything else.
+	const value = typeof input === 'string' ? input : typeof input === 'number' ? String(input) : '';
 	// Sanitize HTML tags and entities
-	let sanitized = sanitizeHtml(input, {
+	let sanitized = sanitizeHtml(value, {
 		allowedTags: [],
 		allowedAttributes: {},
 	});
@@ -24,6 +27,22 @@ export function getSanitizedInitialMessages(initialMessages: string): string[] {
 		.filter((line) => line !== '');
 }
 
+const SCRIPT_CONTEXT_ESCAPES: Record<string, string> = {
+	'<': '\\u003c',
+	'>': '\\u003e',
+	'&': '\\u0026',
+	'\u2028': '\\u2028',
+	'\u2029': '\\u2029',
+};
+
+// Returns a JSON literal safe to embed inside an inline <script> block. Escapes
+// `<`/`>` to prevent </script> breakout and U+2028/U+2029 for legacy JS engines.
+// For string inputs the returned literal includes surrounding double quotes \u2014
+// do not add quotes at the call site.
+export function escapeForScriptContext(value: string | object): string {
+	return JSON.stringify(value).replace(/[<>&\u2028\u2029]/g, (c) => SCRIPT_CONTEXT_ESCAPES[c]);
+}
+
 export function getSanitizedI18nConfig(config: Record<string, string>): Record<string, string> {
 	const sanitized: Record<string, string> = {};
 
@@ -33,11 +52,31 @@ export function getSanitizedI18nConfig(config: Record<string, string>): Record<s
 
 	return sanitized;
 }
-export function getSanitizedCustomCss(customCss: string): string {
-	// Strip any sequence that could close the <style> context.
-	// Browsers treat </style followed by /, space, tab, or > as a closing tag,
-	// so we remove all </style variants (case-insensitive) to prevent breakout.
-	return customCss.replace(/<\/style/gi, '');
+
+/** Ties the empty element the page ships to the script that fills it. */
+const CUSTOM_CSS_ELEMENT_ID = 'n8n-chat-custom-css';
+
+/**
+ * Applies the user's custom CSS without ever placing it in an HTML context.
+ *
+ * Interpolating it into `<style>...</style>` put it one `</style` away from the HTML
+ * parser, and no amount of stripping closes that: removing an inner `</style` splices
+ * the text around it into a real closing tag, so the filter builds the sequence it is
+ * meant to remove. Assigning `textContent` parses no markup at all, so the CSS reaches
+ * the CSS parser byte for byte and cannot reach the HTML one.
+ *
+ * Escaping is the same `escapeForScriptContext` the rest of this page's values use. A
+ * classic script, so it runs before the body is parsed and the styles are never applied
+ * late. The element stays where the old `<style>` was, which keeps the cascade order.
+ */
+function buildCustomCssScript(customCss: string): string {
+	if (!customCss) return '';
+
+	return `
+			<script>
+				document.getElementById(${escapeForScriptContext(CUSTOM_CSS_ELEMENT_ID)}).textContent =
+					${escapeForScriptContext(customCss)};
+			</script>`;
 }
 
 export function createPage({
@@ -85,7 +124,7 @@ export function createPage({
 	const sanitizedShowWelcomeScreen = !!showWelcomeScreen;
 	const sanitizedAllowFileUploads = !!allowFileUploads;
 	const sanitizedAllowedFilesMimeTypes = sanitizeUserInput(allowedFilesMimeTypes?.toString() ?? '');
-	const sanitizedCustomCss = getSanitizedCustomCss(customCss?.toString() ?? '');
+	const customCssScript = buildCustomCssScript(customCss?.toString() ?? '');
 
 	const sanitizedLoadPreviousSession = validLoadPreviousSessionOptions.includes(
 		loadPreviousSession as LoadPreviousSessionChatOption,
@@ -112,7 +151,7 @@ export function createPage({
 					height: 100%;
 				}
 			</style>
-			<style>${sanitizedCustomCss}</style>
+			<style id="${CUSTOM_CSS_ELEMENT_ID}"></style>${customCssScript}
 		</head>
 		<body>
 			<script type="module">
@@ -149,7 +188,7 @@ export function createPage({
 
 					createChat({
 						mode: 'fullscreen',
-						webhookUrl: '${webhookUrl}',
+						webhookUrl: ${escapeForScriptContext(webhookUrl ?? '')},
 						showWelcomeScreen: ${sanitizedShowWelcomeScreen},
 						loadPreviousSession: ${sanitizedLoadPreviousSession !== 'notSupported'},
 						metadata: metadata,
@@ -160,11 +199,11 @@ export function createPage({
 							}
 						},
 						allowFileUploads: ${sanitizedAllowFileUploads},
-						allowedFilesMimeTypes: ${JSON.stringify(sanitizedAllowedFilesMimeTypes)},
+						allowedFilesMimeTypes: ${escapeForScriptContext(sanitizedAllowedFilesMimeTypes)},
 						i18n: {
-							${Object.keys(sanitizedI18nConfig).length ? `en: ${JSON.stringify(sanitizedI18nConfig)},` : ''}
+							${Object.keys(sanitizedI18nConfig).length ? `en: ${escapeForScriptContext(sanitizedI18nConfig)},` : ''}
 						},
-						${sanitizedInitialMessages.length ? `initialMessages: ${JSON.stringify(sanitizedInitialMessages)},` : ''}
+						${sanitizedInitialMessages.length ? `initialMessages: ${escapeForScriptContext(sanitizedInitialMessages)},` : ''}
 						enableStreaming: ${!!enableStreaming},
 					});
 				})();

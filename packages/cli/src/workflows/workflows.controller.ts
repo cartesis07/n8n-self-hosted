@@ -37,6 +37,7 @@ import { BadRequestError } from '@/errors/response-errors/bad-request.error';
 import { ForbiddenError } from '@/errors/response-errors/forbidden.error';
 import { InternalServerError } from '@/errors/response-errors/internal-server.error';
 import { NotFoundError } from '@/errors/response-errors/not-found.error';
+import { UninspectableSubworkflowSourceError } from '@/errors/uninspectable-subworkflow-source.error';
 import { EventService } from '@/events/event.service';
 import { ExecutionService } from '@/executions/execution.service';
 import { ExternalHooks } from '@/external-hooks';
@@ -146,8 +147,12 @@ export class WorkflowsController {
 				this.enterpriseWorkflowService.validateCredentialPermissionsToUser(
 					newWorkflow,
 					allCredentials,
+					req.user,
 				);
 			} catch (error) {
+				if (error instanceof UninspectableSubworkflowSourceError) {
+					throw new BadRequestError(error.message);
+				}
 				throw new BadRequestError(
 					'The workflow you are trying to save contains credentials that are not shared with you',
 				);
@@ -415,7 +420,7 @@ export class WorkflowsController {
 		const { workflowId } = req.params;
 		const forceSave = req.query.forceSave === 'true';
 
-		let updateData = new WorkflowEntity();
+		const updateData = new WorkflowEntity();
 		const { tags, parentFolderId, ...rest } = req.body;
 
 		// TODO: Add zod validation for entire `rest` object before assigning to `updateData`
@@ -428,15 +433,8 @@ export class WorkflowsController {
 
 		Object.assign(updateData, rest);
 
+		// Credential tamper protection is enforced centrally in WorkflowService.update
 		const isSharingEnabled = this.license.isSharingEnabled();
-		if (isSharingEnabled) {
-			updateData = await this.enterpriseWorkflowService.preventTampering(
-				updateData,
-				workflowId,
-				req.user,
-			);
-		}
-
 		const updatedWorkflow = await this.workflowService.update(req.user, updateData, workflowId, {
 			tagIds: tags,
 			parentFolderId,

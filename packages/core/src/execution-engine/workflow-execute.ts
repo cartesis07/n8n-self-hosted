@@ -24,7 +24,6 @@ import type {
 	ITaskData,
 	ITaskDataConnections,
 	ITaskMetadata,
-	NodeApiError,
 	NodeOperationError,
 	Workflow,
 	IRunExecutionData,
@@ -36,6 +35,7 @@ import type {
 	INodeIssues,
 	INodeType,
 	ITaskStartedData,
+	JsonObject,
 	AiAgentRequest,
 	IWorkflowExecutionDataProcess,
 	EngineRequest,
@@ -47,11 +47,13 @@ import {
 	NodeHelpers,
 	NodeConnectionTypes,
 	ApplicationError,
+	BaseError,
 	sleep,
 	Node,
 	UnexpectedError,
 	UserError,
 	OperationalError,
+	NodeApiError,
 	TimeoutExecutionCancelledError,
 	ManualExecutionCancelledError,
 	createRunExecutionData,
@@ -82,6 +84,23 @@ import {
 import { handleRequest, isEngineRequest, makeEngineResponse } from './requests-response';
 import { RoutingNode } from './routing-node';
 import { TriggersAndPollers } from './triggers-and-pollers';
+
+function isAxiosError(error: unknown): error is Error & { isAxiosError: true } {
+	return (
+		typeof error === 'object' &&
+		error !== null &&
+		'isAxiosError' in error &&
+		error.isAxiosError === true
+	);
+}
+
+function normalizeUnhandledAxiosError(error: unknown, node: INode): ExecutionBaseError {
+	if (isAxiosError(error)) {
+		return new NodeApiError(node, error as unknown as JsonObject);
+	}
+
+	return error as ExecutionBaseError;
+}
 
 export class WorkflowExecute {
 	private status: ExecutionStatus = 'new';
@@ -1430,9 +1449,13 @@ export class WorkflowExecute {
 				void hooks.runHook('workflowExecuteAfter', [fullRunData]);
 			});
 
+			let acquiredIsolate = false;
+
 			// eslint-disable-next-line complexity
 			const returnPromise = (async () => {
 				try {
+					acquiredIsolate = await workflow.expression.acquireIsolate();
+
 					// Establish the execution context
 					await establishExecutionContext(
 						workflow,
@@ -1777,9 +1800,23 @@ export class WorkflowExecute {
 							if (error instanceof ApplicationError) {
 								// Report any unhandled errors that were wrapped in by one of our error classes
 								if (error.cause instanceof Error) toReport = error.cause;
-							} else {
-								// Report any unhandled and non-wrapped errors to Sentry
+							} else if (error instanceof BaseError) {
+								// BaseError subclasses specify shouldReport and level
+								// so always report and let beforeSend decide
 								toReport = error;
+							} else if (error instanceof Error) {
+								// Non-BaseError errors only report their class and call frames
+								// The full error is still stored in the execution resultData
+								// Stack frames are in the format `<name>: <message>\n<call frames>`
+								// they can span multiple lines, so we drop everything except call frame lines
+								const errorClass = error.name || 'Error';
+								const sanitized = new Error(errorClass);
+								sanitized.name = errorClass;
+								const frames = (error.stack ?? '')
+									.split('\n')
+									.filter((line) => /^\s+at\s/.test(line));
+								sanitized.stack = [errorClass, ...frames].join('\n');
+								toReport = sanitized;
 							}
 							if (toReport) {
 								Container.get(ErrorReporter).error(toReport, {
@@ -1792,7 +1829,7 @@ export class WorkflowExecute {
 								});
 							}
 
-							const e = error as unknown as ExecutionBaseError;
+							const e = normalizeUnhandledAxiosError(error, executionNode);
 
 							executionError = { ...e, message: e.message, stack: e.stack };
 
@@ -2269,6 +2306,14 @@ export class WorkflowExecute {
 					}
 
 					return fullRunData;
+				})
+				.finally(async () => {
+					if (!acquiredIsolate) return;
+					try {
+						await workflow.expression.releaseIsolate();
+					} catch (error) {
+						Container.get(ErrorReporter).error(error);
+					}
 				});
 
 			return await returnPromise.then(resolve);

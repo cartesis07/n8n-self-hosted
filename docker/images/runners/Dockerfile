@@ -1,15 +1,17 @@
-ARG NODE_VERSION=24.13.1
+ARG NODE_VERSION=24.22.1
+ARG PNPM_VERSION=10.22.0
 ARG PYTHON_VERSION=3.13
 
 # ==============================================================================
 # STAGE 1: JavaScript runner (@n8n/task-runner) artifact from CI
 # ==============================================================================
-FROM node:${NODE_VERSION}-alpine AS javascript-runner-builder
+FROM node:${NODE_VERSION}-alpine3.24 AS javascript-runner-builder
 COPY ./dist/task-runner-javascript /app/task-runner-javascript
 
 WORKDIR /app/task-runner-javascript
 
-RUN corepack enable pnpm
+ARG PNPM_VERSION
+RUN npm i -g "pnpm@${PNPM_VERSION}"
 
 # Remove `catalog` and `workspace` references from package.json to allow `pnpm add` in extended images
 RUN node -e "const pkg = require('./package.json'); \
@@ -102,7 +104,7 @@ RUN set -e; \
 # ==============================================================================
 # STAGE 4: Node alpine base for JS task runner
 # ==============================================================================
-FROM node:${NODE_VERSION}-alpine AS node-alpine
+FROM node:${NODE_VERSION}-alpine3.24 AS node-alpine
 
 # ==============================================================================
 # STAGE 5: Runtime

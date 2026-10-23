@@ -3,7 +3,13 @@ import type { WebhookEntity } from '@n8n/db';
 import { WebhookRepository } from '@n8n/db';
 import { Service } from '@n8n/di';
 import { HookContext, WebhookContext } from 'n8n-core';
-import { ensureError, Node, NodeHelpers, UnexpectedError } from 'n8n-workflow';
+import {
+	ensureError,
+	Node,
+	NodeHelpers,
+	UnexpectedError,
+	WebhookPathTakenError,
+} from 'n8n-workflow';
 import type {
 	IHttpRequestMethods,
 	INode,
@@ -56,9 +62,13 @@ export class WebhookService {
 			cachedStaticWebhook = undefined;
 		}
 
-		if (cachedStaticWebhook) return this.webhookRepository.create(cachedStaticWebhook);
+		if (cachedStaticWebhook) {
+			const entity = this.webhookRepository.create(cachedStaticWebhook);
+			// The cache key is the request path, so a stored entry can hold a dynamic row.
+			return entity.isDynamic ? null : entity;
+		}
 
-		const dbStaticWebhook = await this.findStaticWebhook(method, path);
+		const dbStaticWebhook = await this.findStaticWebhookInDb(method, path);
 
 		if (dbStaticWebhook) {
 			try {
@@ -77,8 +87,9 @@ export class WebhookService {
 	/**
 	 * Find a matching webhook with zero dynamic path segments, e.g. `<uuid>` or `user/profile`.
 	 */
-	private async findStaticWebhook(method: Method, path: string) {
-		return await this.webhookRepository.findOneBy({ webhookPath: path, method });
+	private async findStaticWebhookInDb(method: Method, path: string) {
+		const webhook = await this.webhookRepository.findOneBy({ webhookPath: path, method });
+		return webhook?.isDynamic ? null : webhook;
 	}
 
 	/**
@@ -126,6 +137,33 @@ export class WebhookService {
 	}
 
 	async storeWebhook(webhook: WebhookEntity) {
+		// The (webhookPath, method) primary key serializes concurrent registrations
+		// at the database level (also across processes, e.g. multi-main).
+		try {
+			await this.webhookRepository.insert(webhook);
+		} catch (error) {
+			const existing = await this.webhookRepository.findOneBy({
+				method: webhook.method,
+				webhookPath: webhook.webhookPath,
+			});
+
+			// Not a duplicate-path failure (or the row vanished) - surface the original error.
+			if (!existing) throw error;
+
+			// Path is held by a different workflow - reject instead of overwriting.
+			if (existing.workflowId !== webhook.workflowId) {
+				throw new WebhookPathTakenError(webhook.node, ensureError(error));
+			}
+
+			// Same workflow re-registering its own path (e.g. a stale row left after an
+			// unclean shutdown on init/leadershipChange) - refresh it.
+			await this.webhookRepository.update(
+				{ method: webhook.method, webhookPath: webhook.webhookPath },
+				webhook,
+			);
+		}
+
+		// Cache only after the write succeeds, so a rejected write never poisons the cache.
 		try {
 			await this.cacheService.set(webhook.cacheKey, webhook);
 		} catch (error) {
@@ -133,8 +171,6 @@ export class WebhookService {
 				error: ensureError(error).message,
 			});
 		}
-
-		await this.webhookRepository.upsert(webhook, ['method', 'webhookPath']);
 	}
 
 	createWebhook(data: Partial<WebhookEntity>) {
@@ -371,18 +407,32 @@ export class WebhookService {
 			});
 		}
 
+		const closeFunctions: Array<() => Promise<void>> = [];
 		const context = new WebhookContext(
 			workflow,
 			node,
 			additionalData,
 			mode,
 			webhookData,
-			[],
+			closeFunctions,
 			runExecutionData ?? null,
 		);
 
-		return nodeType instanceof Node
-			? await nodeType.webhook(context)
-			: ((await nodeType.webhook.call(context)) as IWebhookResponseData);
+		try {
+			return nodeType instanceof Node
+				? await nodeType.webhook(context)
+				: ((await nodeType.webhook.call(context)) as IWebhookResponseData);
+		} finally {
+			const settledResults = await Promise.allSettled(closeFunctions.map(async (fn) => await fn()));
+			for (const result of settledResults) {
+				if (result.status === 'rejected') {
+					this.logger.error('Failed to run webhook close function', {
+						error: ensureError(result.reason),
+						nodeName: node.name,
+						nodeType: node.type,
+					});
+				}
+			}
+		}
 	}
 }

@@ -152,6 +152,17 @@ describe('GlobalConfig', () => {
 				maxFileSizeInKB: 10240,
 			},
 		},
+		expressionEngine: {
+			engine: 'vm',
+			poolSize: 1,
+			maxCodeCacheSize: 1024,
+			bridgeTimeout: 5000,
+			bridgeMemoryLimit: 128,
+			observabilityEnabled: true,
+			tracesEnabled: true,
+			slowEvaluationThresholdMs: 50,
+			tracesSampleRate: 0,
+		},
 		externalHooks: {
 			files: [],
 		},
@@ -323,7 +334,7 @@ describe('GlobalConfig', () => {
 		security: {
 			restrictFileAccessTo: '',
 			blockFileAccessToN8nFiles: true,
-			blockFilePatterns: '^(.*\\/)*\\.git(\\/.*)*$',
+			blockFilePatterns: '^(?:[^/]*/)*\\.git(?:/.*)?$',
 			daysAbandonedWorkflow: 90,
 			contentSecurityPolicy: '{}',
 			contentSecurityPolicyReportOnly: false,
@@ -502,6 +513,22 @@ describe('GlobalConfig', () => {
 		expect(config).toMatchObject(expected);
 		expect(expected).toMatchObject(config);
 		expect(mockFs.readFileSync).toHaveBeenCalled();
+	});
+
+	it('should warn when _FILE env variable value contains whitespace', () => {
+		const passwordFile = '/path/to/postgres/password';
+		process.env = {
+			DB_POSTGRESDB_PASSWORD_FILE: passwordFile,
+		};
+		mockFs.readFileSync.mockReturnValueOnce('password-from-file\n');
+
+		const config = Container.get(GlobalConfig);
+		expect(config.database.postgresdb.password).toBe('password-from-file');
+		expect(consoleWarnMock).toHaveBeenCalledWith(
+			expect.stringContaining(
+				'DB_POSTGRESDB_PASSWORD_FILE contained leading or trailing whitespace',
+			),
+		);
 	});
 
 	it('should handle invalid numbers', () => {

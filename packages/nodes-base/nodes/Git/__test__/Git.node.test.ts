@@ -1,7 +1,8 @@
 import { DeploymentConfig, SecurityConfig } from '@n8n/config';
 import { Container } from '@n8n/di';
 import { mock } from 'jest-mock-extended';
-import type { IExecuteFunctions } from 'n8n-workflow';
+import type { IExecuteFunctions, ResolvedFilePath } from 'n8n-workflow';
+import type { PathLike } from 'node:fs';
 import type { SimpleGit } from 'simple-git';
 import simpleGit from 'simple-git';
 
@@ -9,8 +10,16 @@ import { Git } from '../Git.node';
 
 const mockGit = {
 	log: jest.fn(),
+	raw: jest.fn(),
+	listConfig: jest.fn(),
 	env: jest.fn().mockReturnThis(),
 };
+
+const REPOSITORY_PATH = '/tmp/test-repo';
+
+// `git rev-parse --show-toplevel --absolute-git-dir --git-common-dir`, which the node asks
+// for before it resolves any repository reference.
+const revParseOutput = `${REPOSITORY_PATH}\n${REPOSITORY_PATH}/.git\n${REPOSITORY_PATH}/.git\n`;
 
 jest.mock('simple-git');
 const mockSimpleGit = simpleGit as jest.MockedFunction<typeof simpleGit>;
@@ -40,6 +49,7 @@ describe('Git Node', () => {
 			getNodeParameter: jest.fn(),
 			helpers: {
 				isFilePathBlocked: jest.fn(),
+				resolvePath: jest.fn(async (path: PathLike) => path.toString() as ResolvedFilePath),
 				returnJsonArray: jest
 					.fn()
 					.mockImplementation((data: unknown[]) => data.map((item: unknown) => ({ json: item }))),
@@ -50,7 +60,7 @@ describe('Git Node', () => {
 				case 'operation':
 					return 'log';
 				case 'repositoryPath':
-					return '/tmp/test-repo';
+					return REPOSITORY_PATH;
 				case 'options':
 					return {};
 				default:
@@ -59,6 +69,14 @@ describe('Git Node', () => {
 		});
 
 		mockGit.log.mockResolvedValue({ all: [] });
+		mockGit.raw.mockImplementation(async (args: string[]) =>
+			args[0] === 'rev-parse' ? revParseOutput : '',
+		);
+		mockGit.listConfig.mockResolvedValue({
+			files: ['.git/config', 'command line:'],
+			values: { '.git/config': {}, 'command line:': {} },
+			all: {},
+		});
 
 		gitNode = new Git();
 	});
@@ -72,7 +90,7 @@ describe('Git Node', () => {
 
 			expect(mockSimpleGit).toHaveBeenCalledWith(
 				expect.objectContaining({
-					config: ['safe.bareRepository=explicit'],
+					config: expect.arrayContaining(['safe.bareRepository=explicit']),
 				}),
 			);
 		});
@@ -85,7 +103,7 @@ describe('Git Node', () => {
 
 			expect(mockSimpleGit).toHaveBeenCalledWith(
 				expect.objectContaining({
-					config: ['safe.bareRepository=explicit'],
+					config: expect.arrayContaining(['safe.bareRepository=explicit']),
 				}),
 			);
 		});
@@ -98,7 +116,7 @@ describe('Git Node', () => {
 
 			expect(mockSimpleGit).toHaveBeenCalledWith(
 				expect.objectContaining({
-					config: ['safe.bareRepository=explicit'],
+					config: expect.arrayContaining(['safe.bareRepository=explicit']),
 				}),
 			);
 		});
@@ -109,11 +127,8 @@ describe('Git Node', () => {
 
 			await gitNode.execute.call(executeFunctions);
 
-			expect(mockSimpleGit).toHaveBeenCalledWith(
-				expect.objectContaining({
-					config: [],
-				}),
-			);
+			const options = mockSimpleGit.mock.calls[0][0];
+			expect(options.config).not.toContain('safe.bareRepository=explicit');
 		});
 	});
 
@@ -125,7 +140,7 @@ describe('Git Node', () => {
 
 			expect(mockSimpleGit).toHaveBeenCalledWith(
 				expect.objectContaining({
-					config: ['core.hooksPath=/dev/null'],
+					config: expect.arrayContaining(['core.hooksPath=/dev/null']),
 				}),
 			);
 		});
@@ -135,18 +150,67 @@ describe('Git Node', () => {
 
 			await gitNode.execute.call(executeFunctions);
 
-			expect(mockSimpleGit).toHaveBeenCalledWith(
-				expect.objectContaining({
-					config: [],
-				}),
-			);
+			const options = mockSimpleGit.mock.calls[0][0];
+			expect(options.config).not.toContain('core.hooksPath=/dev/null');
+		});
+	});
+
+	describe('Command config neutralization', () => {
+		const expectedOverrides = [
+			'core.sshCommand=ssh',
+			'core.fsmonitor=false',
+			'core.pager=cat',
+			'diff.external=true',
+			'credential.helper=',
+			'core.gitProxy=none',
+			'gpg.program=gpg',
+			'init.templateDir=',
+		];
+		const expectedFlags = [
+			'allowUnsafeSshCommand',
+			'allowUnsafeFsMonitor',
+			'allowUnsafePager',
+			'allowUnsafeDiffExternal',
+			'allowUnsafeCredentialHelper',
+			'allowUnsafeGitProxy',
+			'allowUnsafeGpgProgram',
+			'allowUnsafeTemplateDir',
+		];
+
+		const getOptions = () =>
+			mockSimpleGit.mock.calls[0][0] as { config?: string[]; unsafe?: Record<string, boolean> };
+
+		it('pins command-related git config to safe defaults', async () => {
+			securityConfig.enableGitNodeAllConfigKeys = false;
+
+			await gitNode.execute.call(executeFunctions);
+
+			const { config, unsafe } = getOptions();
+			expect(config).toEqual(expect.arrayContaining(expectedOverrides));
+			for (const flag of expectedFlags) {
+				expect(unsafe?.[flag]).toBe(true);
+			}
+		});
+
+		it('does not pin command config when enableGitNodeAllConfigKeys is true', async () => {
+			securityConfig.enableGitNodeAllConfigKeys = true;
+
+			await gitNode.execute.call(executeFunctions);
+
+			const { config, unsafe } = getOptions();
+			for (const override of expectedOverrides) {
+				expect(config).not.toContain(override);
+			}
+			for (const flag of expectedFlags) {
+				expect(unsafe?.[flag]).toBeUndefined();
+			}
 		});
 	});
 
 	describe('Restricted file paths', () => {
 		it('should throw an error if the repository path is blocked', async () => {
 			(executeFunctions.helpers.isFilePathBlocked as jest.Mock).mockReturnValue(true);
-			(executeFunctions.helpers.resolvePath as jest.Mock).mockResolvedValue('/tmp/test-repo');
+			(executeFunctions.helpers.resolvePath as jest.Mock).mockResolvedValue(REPOSITORY_PATH);
 
 			await expect(gitNode.execute.call(executeFunctions)).rejects.toThrow(
 				'Access to the repository path is not allowed',

@@ -3,11 +3,14 @@ import {
 	CredentialsEntity,
 	CredentialsRepository,
 	SharedWorkflowRepository,
+	WorkflowEntity,
 	WorkflowRepository,
 } from '@n8n/db';
 import { Container } from '@n8n/di';
 import { mock } from 'jest-mock-extended';
+import type { INode } from 'n8n-workflow';
 
+import { UninspectableSubworkflowSourceError } from '@/errors/uninspectable-subworkflow-source.error';
 import { Telemetry } from '@/telemetry';
 import { EnterpriseWorkflowService } from '@/workflows/workflow.service.ee';
 
@@ -59,6 +62,28 @@ describe('EnterpriseWorkflowService', () => {
 			return credentialEntity;
 		}
 
+		const STORED_NODE_ID = '4673f869-f2dc-4a33-b053-ca3193bc5226';
+
+		const inaccessibleCredential = {
+			test: { id: FIRST_CREDENTIAL_ID, name: 'First fake credential' },
+		};
+
+		const makeNode = (overrides: Partial<INode>): INode => ({
+			id: STORED_NODE_ID,
+			name: 'Node',
+			type: 'n8n-nodes-base.httpRequest',
+			typeVersion: 1,
+			position: [0, 0],
+			parameters: {},
+			...overrides,
+		});
+
+		const workflowWithNodes = (nodes: INode[]) => {
+			const workflow = new WorkflowEntity();
+			workflow.nodes = nodes;
+			return workflow;
+		};
+
 		it('Should throw error saving a workflow using credential without access', () => {
 			const newWorkflowVersion = getWorkflow({ addNodeWithOneCred: true });
 			const previousWorkflowVersion = getWorkflow();
@@ -107,6 +132,67 @@ describe('EnterpriseWorkflowService', () => {
 			expect(() => {
 				service.validateWorkflowCredentialUsage(newWorkflowVersion, previousWorkflowVersion, []);
 			}).toThrow();
+		});
+
+		it('Should throw error saving a workflow adding an Execute Sub-workflow node whose inline JSON uses an inaccessible credential', () => {
+			const newWorkflowVersion = getWorkflow({ addNodeWithInlineSubworkflowCred: true });
+			const previousWorkflowVersion = getWorkflow();
+			expect(() => {
+				service.validateWorkflowCredentialUsage(newWorkflowVersion, previousWorkflowVersion, []);
+			}).toThrow();
+		});
+
+		it('Should reject a repeated node id when both claimants use the credential', () => {
+			const previousWorkflowVersion = workflowWithNodes([
+				makeNode({ id: STORED_NODE_ID, name: 'First', credentials: inaccessibleCredential }),
+			]);
+			const newWorkflowVersion = workflowWithNodes([
+				makeNode({ id: STORED_NODE_ID, name: 'First', credentials: inaccessibleCredential }),
+				makeNode({
+					id: STORED_NODE_ID,
+					name: 'Second',
+					credentials: inaccessibleCredential,
+					parameters: { url: 'https://example.com/' },
+				}),
+			]);
+
+			expect(() => {
+				service.validateWorkflowCredentialUsage(newWorkflowVersion, previousWorkflowVersion, []);
+			}).toThrow();
+		});
+
+		// Only one claimant is checked here, so the id count has to cover every submitted node.
+		it('Should reject a repeated node id when only one claimant uses the credential', () => {
+			const previousWorkflowVersion = workflowWithNodes([
+				makeNode({ id: STORED_NODE_ID, name: 'First', credentials: inaccessibleCredential }),
+			]);
+			const newWorkflowVersion = workflowWithNodes([
+				makeNode({ id: STORED_NODE_ID, name: 'First' }),
+				makeNode({
+					id: STORED_NODE_ID,
+					name: 'Second',
+					credentials: inaccessibleCredential,
+					parameters: { url: 'https://example.com/' },
+				}),
+			]);
+
+			expect(() => {
+				service.validateWorkflowCredentialUsage(newWorkflowVersion, previousWorkflowVersion, []);
+			}).toThrow();
+		});
+
+		it('Should not keep submitted fields that the stored node does not have', () => {
+			const storedNode = makeNode({ id: STORED_NODE_ID, credentials: inaccessibleCredential });
+			delete (storedNode as Partial<INode>).parameters;
+
+			const previousWorkflowVersion = workflowWithNodes([storedNode]);
+			const newWorkflowVersion = workflowWithNodes([
+				{ ...storedNode, parameters: { url: 'https://example.com/' } },
+			]);
+
+			service.validateWorkflowCredentialUsage(newWorkflowVersion, previousWorkflowVersion, []);
+
+			expect(newWorkflowVersion.nodes[0].parameters).toBeUndefined();
 		});
 	});
 
@@ -187,6 +273,165 @@ describe('EnterpriseWorkflowService', () => {
 			const workflow = getWorkflow({ addNodeWithOneCred: true, addNodeWithTwoCreds: true });
 			const nodesWithInaccessibleCreds = service.getNodesWithInaccessibleCreds(workflow, []);
 			expect(nodesWithInaccessibleCreds).toHaveLength(2);
+		});
+
+		test('Should flag an Execute Sub-workflow node referencing an inaccessible credential inside its inline workflow JSON', () => {
+			const workflow = getWorkflow({ addNodeWithInlineSubworkflowCred: true });
+			const nodesWithInaccessibleCreds = service.getNodesWithInaccessibleCreds(workflow, []);
+			expect(nodesWithInaccessibleCreds).toHaveLength(1);
+		});
+
+		test('Should not flag an Execute Sub-workflow node when the inline credential is accessible', () => {
+			const workflow = getWorkflow({ addNodeWithInlineSubworkflowCred: true });
+			const nodesWithInaccessibleCreds = service.getNodesWithInaccessibleCreds(workflow, [
+				FIRST_CREDENTIAL_ID,
+			]);
+			expect(nodesWithInaccessibleCreds).toHaveLength(0);
+		});
+
+		test('Should flag a Workflow Tool node referencing an inaccessible credential inside its inline workflow JSON', () => {
+			const workflow = getWorkflow({ addNodeWithWorkflowToolInlineCred: true });
+			const nodesWithInaccessibleCreds = service.getNodesWithInaccessibleCreds(workflow, []);
+			expect(nodesWithInaccessibleCreds).toHaveLength(1);
+		});
+
+		test('Should not flag a Workflow Tool node when the inline credential is accessible', () => {
+			const workflow = getWorkflow({ addNodeWithWorkflowToolInlineCred: true });
+			const nodesWithInaccessibleCreds = service.getNodesWithInaccessibleCreds(workflow, [
+				FIRST_CREDENTIAL_ID,
+			]);
+			expect(nodesWithInaccessibleCreds).toHaveLength(0);
+		});
+
+		test('Should flag a Workflow Retriever node referencing an inaccessible credential inside its inline workflow JSON', () => {
+			const workflow = getWorkflow({ addNodeWithWorkflowRetrieverInlineCred: true });
+			const nodesWithInaccessibleCreds = service.getNodesWithInaccessibleCreds(workflow, []);
+			expect(nodesWithInaccessibleCreds).toHaveLength(1);
+		});
+
+		test('Should not flag a Workflow Retriever node when the inline credential is accessible', () => {
+			const workflow = getWorkflow({ addNodeWithWorkflowRetrieverInlineCred: true });
+			const nodesWithInaccessibleCreds = service.getNodesWithInaccessibleCreds(workflow, [
+				FIRST_CREDENTIAL_ID,
+			]);
+			expect(nodesWithInaccessibleCreds).toHaveLength(0);
+		});
+
+		test('Should flag a node referencing an inaccessible credential inside a nested inline sub-workflow', () => {
+			const workflow = getWorkflow({ addNodeWithNestedInlineSubworkflowCred: true });
+			const nodesWithInaccessibleCreds = service.getNodesWithInaccessibleCreds(workflow, []);
+			expect(nodesWithInaccessibleCreds).toHaveLength(1);
+		});
+
+		test('Should not flag a nested inline sub-workflow when the credential is accessible', () => {
+			const workflow = getWorkflow({ addNodeWithNestedInlineSubworkflowCred: true });
+			const nodesWithInaccessibleCreds = service.getNodesWithInaccessibleCreds(workflow, [
+				SECOND_CREDENTIAL_ID,
+			]);
+			expect(nodesWithInaccessibleCreds).toHaveLength(0);
+		});
+
+		test('Should flag an inaccessible credential buried in a deeply nested inline sub-workflow', () => {
+			const workflow = getWorkflow({ addNodeWithDeeplyNestedInlineCred: true });
+			const nodesWithInaccessibleCreds = service.getNodesWithInaccessibleCreds(workflow, []);
+			expect(nodesWithInaccessibleCreds).toHaveLength(1);
+		});
+
+		test('Should not flag a deeply nested inline sub-workflow when the credential is accessible', () => {
+			const workflow = getWorkflow({ addNodeWithDeeplyNestedInlineCred: true });
+			const nodesWithInaccessibleCreds = service.getNodesWithInaccessibleCreds(workflow, [
+				FIRST_CREDENTIAL_ID,
+			]);
+			expect(nodesWithInaccessibleCreds).toHaveLength(0);
+		});
+	});
+
+	describe('sub-workflow source', () => {
+		const subworkflowNode = (parameters: INode['parameters'], typeVersion = 1.1): INode => ({
+			id: 'b4a1c2d3-0000-4000-8000-000000000001',
+			name: 'Sub',
+			type: 'n8n-nodes-base.executeWorkflow',
+			typeVersion,
+			position: [0, 0],
+			parameters,
+		});
+
+		const urlNode = () =>
+			subworkflowNode({ source: 'url', workflowUrl: 'https://example.com/workflow.json' });
+
+		const workflowWithNodes = (nodes: INode[]) => {
+			const workflow = new WorkflowEntity();
+			workflow.nodes = nodes;
+			return workflow;
+		};
+
+		test.each([
+			['url', { source: 'url', workflowUrl: 'https://example.com/workflow.json' }],
+			['localFile', { source: 'localFile', workflowPath: '/data/workflow.json' }],
+			['an expression', { source: '={{ "url" }}' }],
+			['a non-string value', { source: 1 }],
+		])('Should flag a node whose source is %s', (_, parameters) => {
+			const workflow = workflowWithNodes([subworkflowNode(parameters as INode['parameters'])]);
+			expect(service.getNodesWithInaccessibleCreds(workflow, [])).toHaveLength(1);
+		});
+
+		test.each([
+			['missing', {}],
+			['database', { source: 'database', workflowId: '1' }],
+			['parameter', { source: 'parameter', workflowJson: '{"nodes":[],"connections":{}}' }],
+		])('Should not flag a node whose source is %s', (_, parameters) => {
+			const workflow = workflowWithNodes([subworkflowNode(parameters as INode['parameters'])]);
+			expect(service.getNodesWithInaccessibleCreds(workflow, [])).toHaveLength(0);
+		});
+
+		test('Should flag a url source nested in inline workflow JSON', () => {
+			const workflowJson = JSON.stringify({ nodes: [urlNode()], connections: {} });
+			const workflow = workflowWithNodes([subworkflowNode({ source: 'parameter', workflowJson })]);
+			expect(service.getNodesWithInaccessibleCreds(workflow, [])).toHaveLength(1);
+		});
+
+		test('Should not flag a url source when the user may use every credential', () => {
+			const workflow = workflowWithNodes([urlNode()]);
+			expect(service.getNodesWithInaccessibleCreds(workflow, [], true)).toHaveLength(0);
+		});
+
+		test('Should reject a new url source node with a specific error', () => {
+			expect(() => {
+				service.validateWorkflowCredentialUsage(
+					workflowWithNodes([urlNode()]),
+					workflowWithNodes([]),
+					[],
+				);
+			}).toThrow(UninspectableSubworkflowSourceError);
+		});
+
+		test('Should restore a stored url source node that the user changed', () => {
+			const changedNode = urlNode();
+			changedNode.parameters.workflowUrl = 'https://example.org/other.json';
+			const newWorkflowVersion = workflowWithNodes([changedNode]);
+
+			service.validateWorkflowCredentialUsage(
+				newWorkflowVersion,
+				workflowWithNodes([urlNode()]),
+				[],
+			);
+
+			expect(newWorkflowVersion.nodes[0].parameters.workflowUrl).toBe(
+				'https://example.com/workflow.json',
+			);
+		});
+
+		test('Should keep a new url source node when the user may use every credential', () => {
+			const newWorkflowVersion = workflowWithNodes([urlNode()]);
+			expect(() => {
+				service.validateWorkflowCredentialUsage(
+					newWorkflowVersion,
+					workflowWithNodes([]),
+					[],
+					true,
+				);
+			}).not.toThrow();
+			expect(newWorkflowVersion.nodes).toHaveLength(1);
 		});
 	});
 });
